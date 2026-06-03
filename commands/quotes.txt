@@ -1,0 +1,10 @@
+# quotes.txt — quote pool for the !quote command.
+#
+# One quote per line. Blank lines and lines starting with '#' are ignored,
+# so this header is skipped. The file is re-read on every invocation, so you
+# can edit it live without an !adm reload.
+#
+# Add your own quotes below. Recommendations:
+#   - Keep each line short (~140 chars) so it fits one meshcore message.
+#
+# No quotes are shipped by default — add your own lines beneath this header.

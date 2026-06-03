@@ -1,0 +1,22 @@
+# secrets / runtime state — never commit
+# (comments must be on their own line; .gitignore has no inline comments)
+
+# real config: owner pubkey, channel secrets, radio address
+mcbot.conf
+
+# exported radio private key
+*.privkey
+
+# SQLite database + WAL/SHM sidecars
+mcbot.db
+mcbot.db-wal
+mcbot.db-shm
+
+# logs
+logs/
+
+# python
+__pycache__/
+*.py[cod]
+venv/
+.venv/

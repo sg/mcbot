@@ -1,0 +1,121 @@
+; mcbot.conf.example — copy to mcbot.conf and fill in your values.
+; The real mcbot.conf is gitignored (it holds your owner pubkey, channel
+; secrets, and radio address). CLI arguments override values here.
+
+[radio]
+; transport: tcp (host/port) or serial (serial_port/serial_baud).
+; If serial_port is set and no host is given, serial is assumed.
+transport = tcp
+
+; --- TCP transport ---
+host = 192.168.0.10
+port = 5000
+
+; --- USB-serial transport ---
+; Prefer a stable by-id path; ttyUSB0/ttyACM0 numbers can change on replug.
+; The bot's user must be in the 'dialout' group to open the device.
+; Only one companion connection at a time — serial precludes the WiFi/TCP link.
+;serial_port = /dev/serial/by-id/usb-...
+;serial_baud = 115200
+
+; Optional device PIN (leave blank if not used)
+device_pin =
+
+
+[storage]
+db = ./mcbot.db
+; Per-channel message retention cap
+max_channel_messages = 1000
+; DM retention cap
+max_dms = 1000
+; Contacts retention cap — roll off the oldest (by last_synced_at) past this.
+max_contacts = 500
+; Global cap on the received_packets firehose table
+max_packets = 1000
+
+[channel_logging]
+; Which decryptable channels get a copy of each message STORED in the
+; channel_messages table (the bot's on-disk archive, capped by
+; [storage] max_channel_messages). This is a logging/retention filter
+; ONLY. It does NOT control:
+;   - whether the bot can READ a channel  -> that's the key in [channels]
+;   - whether COMMANDS respond on a channel -> that's each command's own
+;     allowed_channels setting
+; So a channel can be fully readable and run commands without being logged
+; here; conversely, listing a channel here does nothing unless the bot also
+; has its key in [channels].
+;
+; Value: "all" to log every channel the bot can decrypt, or a
+; comma-separated list of channel names and/or indexes to log only those.
+; Names match with or without the leading '#'. Examples:
+;   channels = all
+;   channels = #bot,#wxbot,Public,0
+channels = all
+
+[logging]
+logs_dir = ./logs
+log_level = INFO
+
+[bot]
+commands_dir = ./commands
+; Set to false to disable command dispatch (sync/log only).
+enabled = true
+; Client-side decrypt + ingest of DMs/channel messages from the RX_LOG_DATA
+; RF firehose. On firmware that queues messages (v1.15) this duplicates the
+; radio's get_msg path and is deduped, so it can be set false to run
+; capture-only. The raw packet monitor is unaffected either way. Leave true
+; to also cover non-queueing firmware and channels not programmed into the
+; radio (e.g. beyond its slot capacity). Default: true.
+;rx_log_decrypt = true
+; Path to the exported radio private key (0600). Default: <db>.privkey
+;privkey_path = ./mcbot.privkey
+; Comma-separated full pubkeys bootstrapped into the 'owner' group on every
+; startup. Owners have command='*' (full access including !adm). Keep at
+; least one here so you can't lock yourself out via !adm.
+owner_pubkeys = 0000000000000000000000000000000000000000000000000000000000000000
+; DM retry / ACK behavior (forwarded to send_msg_with_retry):
+;dm_max_attempts = 3
+;dm_flood_after = 2
+;dm_max_flood_attempts = 2
+
+[web]
+; Optional web admin UI + REST/WebSocket API, run in-process. Disabled by
+; default. When enabled it has the bot's full authority (send messages,
+; edit users/groups), so secure it: keep this file out of git, use strong
+; tokens, and prefer TLS if exposed beyond localhost.
+enabled = false
+; Bind address. 127.0.0.1 = local only; 0.0.0.0 = reachable on the LAN.
+host = 0.0.0.0
+port = 8080
+; Bearer tokens for apps/scripts (Authorization: Bearer <token>). Comma list.
+;api_tokens = changeme-long-random-token
+; Browser login. Hash with: ./mcbot.py --hash-password (or tools/hash_password).
+;admin_user = admin
+;admin_password_hash = pbkdf2_sha256$...
+; Secret used to sign session tokens — set to a long random string.
+;session_secret =
+; CORS: comma list of allowed origins, or "*". Tighten once the UI origin is known.
+;cors_origins = *
+; Optional built-in TLS (serve https:// directly without a reverse proxy).
+;tls_cert = ./web.crt
+;tls_key  = ./web.key
+
+; The channel KEYS the bot uses to decrypt channel traffic client-side.
+; This is what determines which channels the bot can READ at all: without
+; an entry here (or a row in the channels DB table), a channel's messages
+; are just undecryptable ciphertext the bot ignores. Listing a channel
+; here is also what lets commands run on it (subject to each command's
+; allowed_channels).
+;
+; ONE-TIME SEED: this section is consumed only on first run, when the
+; channels DB table is empty. After that the channels table is the
+; authority — add/remove channels at runtime with '!adm channel
+; add/remove/list'; edits to this section are then ignored.
+;
+; Format: <channel_idx> = <name>[:<secret_hex>]
+; Names starting with '#' auto-derive their secret as SHA256(name)[:16];
+; non-'#' names need an explicit 16-byte (32 hex char) key.
+[channels]
+;0 = Public:0 = Public:8b3387e9c5cdea6ac9e5edbaa115cd72
+;1 = #bot
+;2 = #bot-cmd-test
