@@ -404,7 +404,10 @@ def load_config(args) -> Config:
 
     config_path = args.config or Path("./mcbot.conf")
     if config_path and Path(config_path).is_file():
-        parser = configparser.ConfigParser()
+        # interpolation=None so a literal '%' in any value (api keys,
+        # session secrets, [env] values) is passed through untouched
+        # instead of being parsed as configparser interpolation syntax.
+        parser = configparser.ConfigParser(interpolation=None)
         parser.read(config_path)
         if parser.has_section("radio"):
             cfg.transport = parser["radio"].get(
@@ -476,6 +479,16 @@ def load_config(args) -> Config:
                         sys.exit(2)
                     cfg.owner_pubkeys.append(tok)
                     seen.add(tok)
+        if parser.has_section("env"):
+            # Push [env] keys into the process environment so command
+            # scripts (and anything else) can read them via os.environ,
+            # e.g. commands/pws.py reads os.environ["PWS_API_KEY"].
+            # Keys are uppercased to match the conventional env-var names
+            # the scripts look up (configparser lowercases option names).
+            # setdefault means a real shell/systemd env var takes
+            # precedence over a value set here.
+            for k, v in parser["env"].items():
+                os.environ.setdefault(k.upper(), v)
         if parser.has_section("web"):
             w = parser["web"]
             cfg.web_enabled = w.getboolean("enabled", cfg.web_enabled)

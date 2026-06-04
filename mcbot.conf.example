@@ -78,7 +78,19 @@ owner_pubkeys = 0000000000000000000000000000000000000000000000000000000000000000
 ;dm_flood_after = 2
 ;dm_max_flood_attempts = 2
 
-[web]
+; Environment variables for the bot and command scripts.
+; Each key here is exported into the process environment at startup, so
+; command scripts can read it via os.environ (e.g. commands/pws.py reads
+; PWS_API_KEY / PWS_STATION_ID). Because this file is gitignored, it's a
+; safe place to keep API keys instead of editing them into tracked scripts.
+; Notes:
+;   - Names are uppercased (api_key and API_KEY both set API_KEY).
+;   - A real shell/systemd env var of the same name takes precedence over
+;     the value set here.
+;   - '%' and other special characters are taken literally; no quoting needed.
+[env]
+;PWS_API_KEY = your-weather-com-api-key
+;PWS_STATION_ID = KXXYYYY1234
 ; Optional web admin UI + REST/WebSocket API, run in-process. Disabled by
 ; default. When enabled it has the bot's full authority (send messages,
 ; edit users/groups), so secure it: keep this file out of git, use strong
