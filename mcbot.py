@@ -371,6 +371,13 @@ class Config:
     # also cover non-queueing firmware and channels not programmed into the
     # radio (e.g. beyond its slot capacity).
     rx_log_decrypt: bool = True
+    # Track whether repeaters rebroadcast the bot's own sent messages. When a
+    # sent DM/channel message is heard being repeated on RF (RX_LOG_DATA), log
+    # each repeater and surface it on the web Packets screen; if none is heard
+    # within repeat_timeout seconds, log + surface that. Works regardless of
+    # rx_log_decrypt (it runs on the always-on firehose).
+    repeat_tracking: bool = True
+    repeat_timeout: float = 5.0
     debug: bool = False
     # idx -> (name, 16-byte secret)
     channels: dict[int, tuple[str, bytes]] = field(default_factory=dict)
@@ -452,6 +459,12 @@ def load_config(args) -> Config:
             )
             cfg.rx_log_decrypt = parser["bot"].getboolean(
                 "rx_log_decrypt", cfg.rx_log_decrypt
+            )
+            cfg.repeat_tracking = parser["bot"].getboolean(
+                "repeat_tracking", cfg.repeat_tracking
+            )
+            cfg.repeat_timeout = parser["bot"].getfloat(
+                "repeat_timeout", cfg.repeat_timeout
             )
             pk = parser["bot"].get("privkey_path", "")
             if pk:
@@ -1010,9 +1023,31 @@ class CommandContext:
     bot: Any  # MCBot
 
 
+@dataclass
+class RepeatWatch:
+    # one pending "did a repeater rebroadcast this?" watch, created when the
+    # bot sends a DM or channel message. correlation is by message *text*
+    # (the on-air pkt_hash differs per send retry, and we never see our own
+    # TX), so text is the primary key; (pkt_hash, path) dedupes individual
+    # heard frames so each distinct repeater is counted once.
+    kind: str                              # "dm" | "channel"
+    text: str
+    dest_pubkey: Optional[str] = None      # lowercase hex (dm)
+    dest_byte: Optional[int] = None        # recipient pubkey first byte (dm)
+    channel_idx: Optional[int] = None      # (channel)
+    disp_name: str = ""
+    registered_at: float = 0.0             # monotonic, at send start
+    send_completed_at: Optional[float] = None
+    seen_frames: set = field(default_factory=set)   # {(pkt_hash, path_hex)}
+    repeat_count: int = 0
+    repeater_keys: set = field(default_factory=set)  # repeater path evidence
+    timer_task: Any = None                 # asyncio.Task
+    done: bool = False
+
+
 # ---------------------------------------------------------------------------
 # The bot
-# 
+#
 class MCBot:
     def __init__(self, cfg: Config, log: logging.Logger):
         self.cfg = cfg
@@ -1060,6 +1095,11 @@ class MCBot:
         # to commands on each message twice.
         self._recent_chan_keys: deque = deque(maxlen=256)
         self._recent_chan_key_set: set[tuple] = set()
+        # repeater-repeat tracking: pending watches for messages we've sent.
+        # the firehose matches heard rebroadcasts against these; the decrypt
+        # path (_handle_inbound_channel) also consults them to suppress
+        # re-ingesting our own repeated channel message as a phantom inbound.
+        self._repeat_watches: list[RepeatWatch] = []
 
     # channel logging filter
     def _parse_log_channels(self) -> None:
@@ -1500,6 +1540,291 @@ class MCBot:
                 bits.append(f"reason={rs!r}")
         self.logger.info(" ".join(bits))
 
+        # correlate this frame against messages we've sent (repeater-repeat
+        # tracking). wrapped so a matcher bug can never break packet recording.
+        try:
+            await self._match_repeat(payload)
+        except Exception:
+            self.logger.exception("repeat matcher failed")
+
+    # ------------------------------------------------------------------
+    # Repeater-repeat tracking
+    #
+    # When the bot transmits a DM/channel message, nearby repeaters
+    # rebroadcast ("repeat") it. The radio doesn't hear its own TX, but it
+    # hears each repeater's rebroadcast as an RX_LOG_DATA frame whose on-air
+    # payload is byte-identical to ours (only the path grows). We can't learn
+    # our sent packet's hash from the radio, so we correlate by message text:
+    # decrypt the heard frame (channel secret / our DM shared secret) and
+    # compare. Each distinct (pkt_hash, path) is one repeater; if none is
+    # heard within cfg.repeat_timeout we log + surface that too.
+    # ------------------------------------------------------------------
+    def _register_repeat_watch(
+        self, *, kind: str, text: str,
+        dest_pubkey: Optional[str] = None,
+        channel_idx: Optional[int] = None,
+        disp_name: str = "",
+    ) -> Optional[RepeatWatch]:
+        # build + register a watch (no timer yet — see _start_repeat_timer).
+        # returns None (inert) when tracking is off or we can't detect repeats.
+        if not self.cfg.repeat_tracking or self.my_pubkey_byte is None:
+            return None
+        text = text or ""
+        if not text:
+            return None
+        dest_byte = None
+        if kind == "dm":
+            # DM repeats are detected by decrypting with our shared secret;
+            # without the private key we'd never match, so don't register
+            # (a watch that can't match would always log a false NO_REPEAT).
+            if not dest_pubkey or self.my_private_key is None:
+                return None
+            dest_pubkey = dest_pubkey.lower()
+            try:
+                dest_byte = int(dest_pubkey[0:2], 16)
+            except ValueError:
+                return None
+        w = RepeatWatch(
+            kind=kind, text=text, dest_pubkey=dest_pubkey,
+            dest_byte=dest_byte, channel_idx=channel_idx,
+            disp_name=disp_name, registered_at=time.monotonic(),
+        )
+        self._repeat_watches.append(w)
+        # bound memory: drop the oldest if we somehow accumulate too many
+        while len(self._repeat_watches) > 64:
+            old = self._repeat_watches.pop(0)
+            t = old.timer_task
+            if t is not None and not t.done():
+                t.cancel()
+        return w
+
+    def _start_repeat_timer(self, watch: Optional[RepeatWatch]) -> None:
+        # start the no-repeat countdown AFTER the (possibly slow, retrying)
+        # send returns, so the timeout isn't consumed while still transmitting.
+        if watch is None or watch.done:
+            return
+        watch.send_completed_at = time.monotonic()
+        try:
+            watch.timer_task = asyncio.create_task(
+                self._repeat_timeout_runner(watch)
+            )
+        except RuntimeError:
+            pass  # no running loop (not expected from an async caller)
+
+    def _discard_watch(self, watch: RepeatWatch) -> None:
+        try:
+            self._repeat_watches.remove(watch)
+        except ValueError:
+            pass
+
+    async def _repeat_timeout_runner(self, watch: RepeatWatch) -> None:
+        try:
+            await asyncio.sleep(max(0.1, self.cfg.repeat_timeout))
+        except asyncio.CancelledError:
+            return
+        if watch.done:
+            self._discard_watch(watch)
+            return
+        watch.done = True
+        try:
+            if watch.repeat_count == 0:
+                await self._emit_no_repeat(watch)
+        except Exception:
+            self.logger.exception("repeat-timeout handler failed")
+        finally:
+            self._discard_watch(watch)
+
+    def _matches_active_channel_watch(
+        self, channel_idx: Optional[int], text: str
+    ) -> bool:
+        # true if an active (not-yet-expired) channel watch matches this
+        # decrypted channel message — i.e. it's our own message coming back
+        # via a repeater. used to suppress phantom re-ingest.
+        if not self.cfg.repeat_tracking or channel_idx is None:
+            return False
+        for w in self._repeat_watches:
+            if (
+                w.kind == "channel"
+                and not w.done
+                and w.channel_idx == channel_idx
+                and w.text == text
+            ):
+                return True
+        return False
+
+    async def _match_repeat(self, payload) -> None:
+        # fast path: nothing to do unless tracking is on and a send is pending
+        if not self.cfg.repeat_tracking or not self._repeat_watches:
+            return
+        if not isinstance(payload, dict):
+            return
+        ptype = payload.get("payload_type")
+        pkt = payload.get("pkt_payload")
+        if not isinstance(pkt, (bytes, bytearray)):
+            return
+        path_hex = payload.get("path") or ""
+        path_len = payload.get("path_len")
+        # a frame with no path is the origin's own copy, never a repeater
+        # rebroadcast — skip so a hypothetical self-echo isn't counted.
+        if not path_len:
+            return
+        pkt_hash = payload.get("pkt_hash")
+        path_hash_size = payload.get("path_hash_size")
+
+        watch: Optional[RepeatWatch] = None
+        if ptype == PayloadType.GROUP_TEXT.value:
+            if len(pkt) < 3:
+                return
+            ch = self.channels_by_hash.get(pkt[0])
+            if ch is None:
+                return
+            idx, _name, secret = ch
+            dec = decrypt_group_text(bytes(pkt), secret)
+            if dec is None:
+                return
+            for w in self._repeat_watches:
+                if (
+                    w.kind == "channel" and not w.done
+                    and w.channel_idx == idx and w.text == dec.message
+                ):
+                    watch = w
+                    break
+        elif ptype == PayloadType.TEXT_MESSAGE.value:
+            if len(pkt) < 4 or self.my_private_key is None:
+                return
+            if pkt[1] != self.my_pubkey_byte:
+                return  # not sent by us
+            for w in self._repeat_watches:
+                if w.kind != "dm" or w.done or w.dest_byte != pkt[0]:
+                    continue
+                try:
+                    their_pub = bytes.fromhex(w.dest_pubkey or "")
+                    if len(their_pub) != 32:
+                        continue
+                    shared = derive_shared_secret(
+                        self.my_private_key, their_pub
+                    )
+                    dec = decrypt_direct_message(bytes(pkt), shared)
+                except Exception:
+                    continue
+                if dec is not None and dec.message == w.text:
+                    watch = w
+                    break
+        else:
+            return
+
+        if watch is None:
+            return
+
+        # dedupe per heard frame: same (pkt_hash, path) = the same repeat we
+        # already counted; a different path = a different repeater. record the
+        # frame and bump the count BEFORE any await so interleaved matches
+        # can't double-count.
+        frame_key = (pkt_hash, path_hex)
+        if frame_key in watch.seen_frames:
+            return
+        watch.seen_frames.add(frame_key)
+        watch.repeat_count += 1
+        last_hop = (
+            path_hex[-(path_hash_size * 2):]
+            if path_hex and path_hash_size else (path_hex or None)
+        )
+        if last_hop:
+            watch.repeater_keys.add(last_hop)
+
+        path_disp = format_path(path_hex, path_hash_size) if path_hex else ""
+        snippet = (
+            watch.text[:60] + "…" if len(watch.text) > 60 else watch.text
+        )
+        snr = payload.get("snr")
+        if watch.kind == "channel":
+            target = f"ch={watch.channel_idx}"
+        else:
+            target = f"to={watch.disp_name or (watch.dest_pubkey or '')[:12]}"
+        self.logger.info(
+            "REPEAT #%d %s by repeater path=%s snr=%s: %r",
+            watch.repeat_count, target, path_disp, snr, snippet,
+        )
+        await self._emit_synthetic_packet(
+            packet_type="REPEAT",
+            text=watch.text,
+            channel_idx=watch.channel_idx,
+            sender_name=watch.disp_name if watch.kind == "dm" else None,
+            sender_pubkey=watch.dest_pubkey if watch.kind == "dm" else None,
+            sender_prefix=last_hop,
+            path=path_hex or None,
+            path_len=path_len,
+            snr=snr,
+        )
+
+    async def _emit_no_repeat(self, watch: RepeatWatch) -> None:
+        snippet = (
+            watch.text[:60] + "…" if len(watch.text) > 60 else watch.text
+        )
+        if watch.kind == "channel":
+            target = f"ch={watch.channel_idx}"
+        else:
+            target = f"to={watch.disp_name or (watch.dest_pubkey or '')[:12]}"
+        self.logger.info(
+            "NO_REPEAT %s: no repeater heard within %.0fs: %r",
+            target, self.cfg.repeat_timeout, snippet,
+        )
+        await self._emit_synthetic_packet(
+            packet_type="NO_REPEAT",
+            text=watch.text,
+            channel_idx=watch.channel_idx,
+            sender_name=watch.disp_name if watch.kind == "dm" else None,
+            sender_pubkey=watch.dest_pubkey if watch.kind == "dm" else None,
+        )
+
+    async def _emit_synthetic_packet(
+        self, *, packet_type: str,
+        text: Optional[str] = None,
+        channel_idx: Optional[int] = None,
+        sender_name: Optional[str] = None,
+        sender_pubkey: Optional[str] = None,
+        sender_prefix: Optional[str] = None,
+        path: Optional[str] = None,
+        path_len: Optional[int] = None,
+        snr: Optional[float] = None,
+    ) -> None:
+        # insert a synthetic received_packets row (REPEAT / NO_REPEAT) and
+        # push it to the web Packets feed, mirroring _record_packet's storage.
+        # event_type stays RX_LOG_DATA (the true source); packet_type carries
+        # the synthetic kind so the Packets screen filters/labels it.
+        now_ts = int(time.time())
+        cur = await self.db.execute(
+            """INSERT INTO received_packets
+            (received_at, event_type, packet_type, sender_pubkey_prefix,
+             sender_pubkey, sender_name, path, path_len, snr, rssi,
+             channel_idx, text, payload_json, attributes_json, raw_hex)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                now_ts, "RX_LOG_DATA", packet_type,
+                sender_prefix, sender_pubkey, sender_name,
+                path, path_len, snr, None, channel_idx, text,
+                "{}", "{}", None,
+            ),
+        )
+        await self._trim_global("received_packets", self.cfg.max_packets)
+        if self.web_packet_feed.has_subscribers():
+            self.web_packet_feed.publish({
+                "id": cur.lastrowid,
+                "received_at": now_ts,
+                "event_type": "RX_LOG_DATA",
+                "packet_type": packet_type,
+                "sender_pubkey_prefix": sender_prefix,
+                "sender_pubkey": sender_pubkey,
+                "sender_name": sender_name,
+                "path": path,
+                "path_len": path_len,
+                "snr": snr,
+                "rssi": None,
+                "channel_idx": channel_idx,
+                "text": text,
+                "has_raw": False,
+            })
+
     # DM / channel handlers
     async def _on_dm(self, event) -> None:
         payload = event.payload or {}
@@ -1904,6 +2229,16 @@ class MCBot:
         if dec is None:
             self.logger.debug(
                 "channel msg on idx=%d (%s): MAC/AES failed", idx, name
+            )
+            return
+        # if this decrypts to a channel message we ourselves just sent, it's a
+        # repeater rebroadcasting our own traffic — _match_repeat (firehose)
+        # already counts/surfaces it as a REPEAT, so don't re-ingest it here as
+        # a phantom inbound message (or re-dispatch a command on it).
+        if self._matches_active_channel_watch(idx, dec.message):
+            self.logger.debug(
+                "channel msg on idx=%d (%s) is our own repeated send; "
+                "suppressing re-ingest", idx, name,
             )
             return
         self.logger.info(
@@ -2730,6 +3065,13 @@ class MCBot:
         lib_contacts = getattr(self.mc, "contacts", None)
         if isinstance(lib_contacts, dict):
             contact = lib_contacts.get(pk)
+        # register the repeat-watch BEFORE sending: send_msg_with_retry can
+        # block for seconds across retries, during which repeaters may already
+        # be rebroadcasting the first attempt. the no-repeat timer is started
+        # only after the send returns (see _start_repeat_timer).
+        watch = self._register_repeat_watch(
+            kind="dm", text=text, dest_pubkey=pk, disp_name=to_disp,
+        )
         t0 = time.monotonic()
         ev = await self.mc.commands.send_msg_with_retry(
             contact or pk, text,
@@ -2737,6 +3079,7 @@ class MCBot:
             max_flood_attempts=self.cfg.dm_max_flood_attempts,
             flood_after=self.cfg.dm_flood_after,
         )
+        self._start_repeat_timer(watch)
         dt_ms = int((time.monotonic() - t0) * 1000)
         if ev is None:
             self.logger.warning(
@@ -2788,7 +3131,11 @@ class MCBot:
         self.logger.info(
             "sending channel msg ch=%d: %r", channel_idx, snippet
         )
+        watch = self._register_repeat_watch(
+            kind="channel", text=text, channel_idx=channel_idx,
+        )
         ev = await self.mc.commands.send_chan_msg(channel_idx, text)
+        self._start_repeat_timer(watch)
         if ev is not None and getattr(ev.type, "name", "") == "ERROR":
             p = ev.payload if isinstance(ev.payload, dict) else {}
             self.logger.warning(
@@ -3071,6 +3418,12 @@ class MCBot:
                 pass
             except Exception:
                 self.logger.exception("background task cleanup failed")
+        # cancel any outstanding repeat-watch no-repeat timers
+        for w in list(self._repeat_watches):
+            tt = w.timer_task
+            if tt is not None and not tt.done():
+                tt.cancel()
+        self._repeat_watches.clear()
         if self.mc:
             try:
                 await self.mc.stop_auto_message_fetching()

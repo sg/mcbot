@@ -67,6 +67,16 @@ enabled = true
 ; to also cover non-queueing firmware and channels not programmed into the
 ; radio (e.g. beyond its slot capacity). Default: true.
 ;rx_log_decrypt = true
+; Track repeaters rebroadcasting the bot's OWN sent messages. When a DM or
+; channel message the bot sent is heard being repeated on RF, each repeat is
+; logged and shown on the web Packets screen (packet_type REPEAT). If no
+; repeater is heard within repeat_timeout seconds, a NO_REPEAT row is logged
+; + shown. "No repeat" means none was HEARD within the window (a direct-routed
+; DM may be forwarded out of earshot), not that delivery failed. Detection runs
+; on the always-on packet firehose, so it works even with rx_log_decrypt=false.
+; Default: true / 5 seconds.
+;repeat_tracking = true
+;repeat_timeout = 5
 ; Path to the exported radio private key (0600). Default: <db>.privkey
 ;privkey_path = ./mcbot.privkey
 ; Comma-separated full pubkeys bootstrapped into the 'owner' group on every
