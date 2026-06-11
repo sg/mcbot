@@ -88,6 +88,28 @@ owner_pubkeys = 0000000000000000000000000000000000000000000000000000000000000000
 ;dm_flood_after = 2
 ;dm_max_flood_attempts = 2
 
+; Radio contact-table rollover. The radio's contact table (~350 slots) does
+; NOT age out old contacts on its own, so once full it drops new nodes and
+; emits CONTACTS_FULL. When enabled, the bot evicts the stalest contacts FROM
+; THE RADIO to keep radio_evict_headroom free slots — on startup and whenever
+; CONTACTS_FULL fires. The bot's own sqlite contacts table ([storage]
+; max_contacts) is the long-term archive and is never deleted by eviction.
+; Stalest = least-recently-seen (by the bot's own sync clock). Protected from
+; eviction: bot users, owner_pubkeys, anyone the bot DM'd in the last 24h, and
+; any contact types in radio_evict_protect_types. A node dropped while the
+; table was full is re-added on its NEXT advert. Manual eviction is always
+; available on the web Manage->Radio page (and policy can be toggled there at
+; runtime); radio_evict_enabled only governs the AUTOMATIC startup/CONTACTS_FULL
+; triggers. Web policy changes are runtime-only — this file is the startup
+; source of truth. Default: enabled, 8 free slots.
+;radio_evict_enabled = true
+;radio_evict_headroom = 8
+; Contact types never evicted (names none/cli/repeater/room/sensor, or ints).
+; Empty = protect none of them (people are still protected as described above).
+;radio_evict_protect_types = repeater,room
+;radio_evict_max_per_run = 50
+;radio_evict_min_interval = 120
+
 ; Environment variables for the bot and command scripts.
 ; Each key here is exported into the process environment at startup, so
 ; command scripts can read it via os.environ (e.g. commands/pws.py reads

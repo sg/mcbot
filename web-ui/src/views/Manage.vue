@@ -228,6 +228,76 @@ async function sendAdvert() {
   advertSending.value = false
 }
 
+// ---- radio contact-table rollover ----
+const contactStatus = ref(null)
+const statusLoading = ref(false)
+const evictBusy = ref(false)
+const policyForm = ref({ enabled: true, headroom: 8 })
+
+async function loadContactStatus() {
+  if (statusLoading.value) return
+  statusLoading.value = true
+  error.value = ''
+  try {
+    const s = await api('/radio/contacts-status')
+    contactStatus.value = s
+    policyForm.value = { enabled: s.policy.enabled, headroom: s.policy.headroom }
+  } catch (e) {
+    error.value = e.message
+  }
+  statusLoading.value = false
+}
+
+async function applyPolicy() {
+  await run(
+    api('/radio/contacts-policy', {
+      method: 'POST',
+      json: {
+        enabled: policyForm.value.enabled,
+        headroom: Number(policyForm.value.headroom),
+      },
+    }),
+    'Eviction policy updated (runtime only — set radio_evict_* in mcbot.conf to persist)',
+  )
+  await loadContactStatus()
+}
+
+async function evictNow() {
+  if (evictBusy.value) return
+  evictBusy.value = true
+  error.value = ''
+  notice.value = ''
+  try {
+    // dry-run preview first, then confirm the actual victims
+    const preview = await api('/radio/evict-contacts', {
+      method: 'POST',
+      json: { dry_run: true },
+    })
+    const victims = preview.evicted || []
+    if (!victims.length) {
+      notice.value = `Nothing to evict (used ${preview.used}/${preview.max ?? '?'}).`
+      evictBusy.value = false
+      return
+    }
+    const names = victims.map((v) => v.name || v.pubkey.slice(0, 12))
+    const shown = names.slice(0, 20).join('\n')
+    const more = names.length > 20 ? `\n…and ${names.length - 20} more` : ''
+    if (!confirm(`Evict ${victims.length} stale contact(s) from the radio?\n\n${shown}${more}`)) {
+      evictBusy.value = false
+      return
+    }
+    const res = await api('/radio/evict-contacts', { method: 'POST', json: {} })
+    notice.value =
+      `Evicted ${res.evicted.length} contact(s)` +
+      (res.failed ? `, ${res.failed} failed` : '') +
+      (res.shortfall ? `, ${res.shortfall} short (protected)` : '')
+  } catch (e) {
+    error.value = e.message
+  }
+  evictBusy.value = false
+  await loadContactStatus()
+}
+
 // Display label + (optional) unit for each known device_info key. Anything
 // not listed falls into an "Other" group with the raw key.
 const DEVINFO_GROUPS = [
@@ -558,6 +628,51 @@ onMounted(() => loadTab('stats'))
               Zero-hop reaches direct neighbors only; flood propagates through the mesh.
             </span>
           </div>
+
+          <!-- Contact-table rollover -->
+          <div style="border-top: 1px solid var(--border, #333)">
+            <div class="toolbar">
+              <strong>Contact table</strong>
+              <button :disabled="statusLoading" @click="loadContactStatus">
+                {{ statusLoading ? 'Checking…' : 'Check contact table' }}
+              </button>
+              <span class="muted">Reads the radio's contact list (takes a few seconds).</span>
+            </div>
+            <div v-if="contactStatus" class="decoded">
+              <div class="kv">
+                <div class="k">Used / max</div>
+                <div>
+                  {{ contactStatus.used }} / {{ contactStatus.max ?? '?' }}
+                  <span class="muted">({{ contactStatus.free ?? '?' }} free)</span>
+                </div>
+                <div class="k">Protected / evictable</div>
+                <div>{{ contactStatus.protected }} protected, {{ contactStatus.eligible }} evictable</div>
+                <div class="k">Firmware autoadd byte</div>
+                <div class="mono">{{ contactStatus.autoadd_raw ?? 'n/a' }}</div>
+              </div>
+              <div class="toolbar">
+                <label class="chk">
+                  <input type="checkbox" v-model="policyForm.enabled" />
+                  Auto-evict (startup + when full)
+                </label>
+                <label class="chk">
+                  Headroom
+                  <input type="number" min="1" max="100" v-model.number="policyForm.headroom" style="width: 4em" />
+                </label>
+                <button @click="applyPolicy">Apply</button>
+                <button :disabled="evictBusy" @click="evictNow">
+                  {{ evictBusy ? 'Evicting…' : 'Evict to headroom now' }}
+                </button>
+              </div>
+              <p class="muted" style="margin: 4px 12px 8px">
+                Evicts the stalest contacts from the radio (bot users, owners, and
+                recent DM peers are protected; the bot's database keeps the full
+                archive). Policy changes here are runtime only — set radio_evict_*
+                in mcbot.conf to persist across restarts.
+              </p>
+            </div>
+          </div>
+
           <div class="decoded">
             <template v-for="g in DEVINFO_GROUPS" :key="g.title">
               <h4 style="margin: 12px 0 4px">{{ g.title }}</h4>

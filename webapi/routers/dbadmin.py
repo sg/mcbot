@@ -449,3 +449,52 @@ async def radio_advert(
         return await bot.mgmt.send_advert(body.flood, **actor_kwargs(identity))
     except MgmtError as e:
         raise http_for_mgmt(e)
+
+
+@router.get("/radio/contacts-status")
+async def radio_contacts_status(
+    bot=Depends(get_bot), identity: str = Depends(require_auth),
+):
+    # auth required (unlike other GETs): this actively drives the radio
+    # (full contact dump) rather than reading the local DB.
+    try:
+        return await bot.mgmt.radio_contacts_status(**actor_kwargs(identity))
+    except MgmtError as e:
+        raise http_for_mgmt(e)
+
+
+class EvictBody(BaseModel):
+    count: int | None = None
+    dry_run: bool = False
+
+
+@router.post("/radio/evict-contacts")
+async def radio_evict_contacts(
+    body: EvictBody,
+    bot=Depends(get_bot), identity: str = Depends(require_auth),
+):
+    try:
+        return await bot.mgmt.radio_evict_contacts(
+            count=body.count, dry_run=body.dry_run, **actor_kwargs(identity)
+        )
+    except MgmtError as e:
+        raise http_for_mgmt(e)
+
+
+class EvictPolicyBody(BaseModel):
+    enabled: bool | None = None
+    headroom: int | None = None
+
+
+@router.post("/radio/contacts-policy")
+async def radio_contacts_policy(
+    body: EvictPolicyBody,
+    bot=Depends(get_bot), identity: str = Depends(require_auth),
+):
+    try:
+        return await bot.mgmt.radio_set_evict_policy(
+            enabled=body.enabled, headroom=body.headroom,
+            **actor_kwargs(identity),
+        )
+    except MgmtError as e:
+        raise http_for_mgmt(e)
