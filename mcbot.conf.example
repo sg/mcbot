@@ -101,6 +101,8 @@ owner_pubkeys = 0000000000000000000000000000000000000000000000000000000000000000
 [env]
 ;PWS_API_KEY = your-weather-com-api-key
 ;PWS_STATION_ID = KXXYYYY1234
+
+[web]
 ; Optional web admin UI + REST/WebSocket API, run in-process. Disabled by
 ; default. When enabled it has the bot's full authority (send messages,
 ; edit users/groups), so secure it: keep this file out of git, use strong
