@@ -598,6 +598,105 @@ class Management:
         )
         return {"flood": flood, "ok": ok}
 
+    # ==================================================================
+    # Radio contact-table rollover
+    # ==================================================================
+    def _evict_policy(self) -> dict:
+        import mcbot  # local import avoids any import-time cycle
+        bot = self.bot
+        return {
+            "enabled": bot.evict_enabled,
+            "headroom": bot.evict_headroom,
+            "protect_types": sorted(
+                mcbot.CONTACT_TYPE_NAMES.get(t, str(t))
+                for t in bot.cfg.radio_evict_protect_types
+            ),
+            "max_per_run": bot.cfg.radio_evict_max_per_run,
+            "min_interval": bot.cfg.radio_evict_min_interval,
+        }
+
+    async def radio_contacts_status(
+        self, *, actor_pubkey=None, actor_name=None,
+    ) -> dict:
+        """Report the radio contact table's usage + current eviction policy.
+        Read-only (drives a fresh radio dump via a dry-run eviction); not
+        audited. Includes the raw firmware autoadd byte for diagnostics."""
+        try:
+            preview = await self.bot.evict_radio_contacts(
+                target_free=self.bot.evict_headroom, dry_run=True
+            )
+        except Exception as e:
+            raise MgmtError(f"could not read radio contacts: {e}", "conflict")
+        autoadd_raw = None
+        try:  # best-effort; absent on older firmware
+            ev = await self.bot.mc.commands.get_autoadd_config()
+            if ev and isinstance(ev.payload, dict):
+                autoadd_raw = ev.payload.get("config")
+        except Exception:
+            pass
+        return {
+            "used": preview["used"],
+            "max": preview["max"],
+            "free": preview["free_before"],
+            "headroom_target": preview["target_free"],
+            "protected": preview["protected"],
+            "eligible": preview["eligible"],
+            "would_evict": len(preview["evicted"]),
+            "autoadd_raw": autoadd_raw,
+            "policy": self._evict_policy(),
+        }
+
+    async def radio_evict_contacts(
+        self, count=None, dry_run=False,
+        *, actor_pubkey=None, actor_name=None,
+    ) -> dict:
+        """Evict stale contacts from the radio now. With `count`, remove up to
+        that many; otherwise free slots up to the configured headroom. Audited
+        as 'radio.evict' (skipped for dry runs)."""
+        if count is not None:
+            try:
+                count = int(count)
+            except (TypeError, ValueError):
+                raise MgmtError("count must be an integer", "invalid")
+            if count < 1:
+                raise MgmtError("count must be >= 1", "invalid")
+        try:
+            res = await self.bot.evict_radio_contacts(
+                count=count, dry_run=dry_run,
+            )
+        except Exception as e:
+            raise MgmtError(f"radio eviction failed: {e}", "conflict")
+        if not dry_run:
+            await self._audit(
+                actor_pubkey, actor_name, "radio.evict", None,
+                f"evicted={len(res['evicted'])} failed={res['failed']} "
+                f"shortfall={res['shortfall']}",
+            )
+        return res
+
+    async def radio_set_evict_policy(
+        self, enabled=None, headroom=None,
+        *, actor_pubkey=None, actor_name=None,
+    ) -> dict:
+        """Change the runtime eviction policy (auto on/off, headroom). Runtime
+        only — mcbot.conf is the source of truth at next startup. Audited as
+        'radio.evict_policy'."""
+        if enabled is not None:
+            self.bot.evict_enabled = bool(enabled)
+        if headroom is not None:
+            try:
+                headroom = int(headroom)
+            except (TypeError, ValueError):
+                raise MgmtError("headroom must be an integer", "invalid")
+            if not (1 <= headroom <= 100):
+                raise MgmtError("headroom must be between 1 and 100", "invalid")
+            self.bot.evict_headroom = headroom
+        await self._audit(
+            actor_pubkey, actor_name, "radio.evict_policy", None,
+            f"enabled={self.bot.evict_enabled} headroom={self.bot.evict_headroom}",
+        )
+        return self._evict_policy()
+
     async def send_dm(
         self, pubkey: str, text: str,
         *, actor_pubkey=None, actor_name=None,

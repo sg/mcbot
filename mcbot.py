@@ -107,6 +107,35 @@ PACKET_TYPE_MAP = {
 # channel messages typically come through as "Name: text"
 CHANNEL_SENDER_RE = re.compile(r"^([^:\n]{1,32}):\s+(.*)$", re.DOTALL)
 
+# contact "type" integer -> the names a user can write in config/UI. Mirrors
+# the library's CONTACT_TYPENAMES (none/cli/repeater/room/sensor); extra
+# aliases ('rep','sens','companion') are accepted for convenience.
+CONTACT_TYPE_NAMES = {0: "none", 1: "cli", 2: "repeater", 3: "room", 4: "sensor"}
+_CONTACT_TYPE_ALIASES = {
+    "none": 0, "cli": 1, "companion": 1, "client": 1,
+    "repeater": 2, "rep": 2, "room": 3, "roomserver": 3, "room_server": 3,
+    "sensor": 4, "sens": 4,
+}
+
+
+def parse_contact_types(raw: str, on_error=None) -> set:
+    """Parse a comma/space list of contact-type names or ints into a set of
+    type integers. Unknown tokens invoke on_error(token) (if given) and are
+    skipped."""
+    out: set = set()
+    for tok in re.split(r"[,\s]+", raw or ""):
+        tok = tok.strip().lower()
+        if not tok:
+            continue
+        if tok.isdigit():
+            out.add(int(tok))
+            continue
+        if tok in _CONTACT_TYPE_ALIASES:
+            out.add(_CONTACT_TYPE_ALIASES[tok])
+        elif on_error:
+            on_error(tok)
+    return out
+
 
 def format_path(path_hex: Optional[str], hash_size: Optional[int]) -> str:
     """insert commas between routing-path hops in a hex string.
@@ -387,6 +416,21 @@ class Config:
     dm_max_attempts: int = 3
     dm_flood_after: int = 2
     dm_max_flood_attempts: int = 2
+    # --- radio contact-table rollover ---
+    # The radio's contact table (max_contacts, ~350) doesn't age out old
+    # contacts, so once full it drops new nodes (CONTACTS_FULL). When enabled,
+    # the bot evicts the stalest radio contacts to keep `radio_evict_headroom`
+    # free slots, on startup and whenever CONTACTS_FULL fires. The bot's own
+    # sqlite contacts table is the long-term archive and is never touched by
+    # eviction. evict_enabled/evict_headroom are also adjustable at runtime via
+    # the web Manage->Radio page (runtime-only; this file is the startup truth).
+    radio_evict_enabled: bool = True
+    radio_evict_headroom: int = 8
+    # contact types (per CONTACT_TYPENAMES: none/cli/repeater/room/sensor) that
+    # are never evicted, in addition to bot users, owners, and recent DM peers.
+    radio_evict_protect_types: set = field(default_factory=set)
+    radio_evict_max_per_run: int = 50      # safety cap on removals per run
+    radio_evict_min_interval: float = 120  # seconds debounce for auto runs
     # --- web admin UI / API ([web] section) ---
     web_enabled: bool = False
     web_host: str = "127.0.0.1" # 0.0.0.0 to expose on all interfaces
@@ -478,6 +522,26 @@ def load_config(args) -> Config:
             cfg.dm_max_flood_attempts = parser["bot"].getint(
                 "dm_max_flood_attempts", cfg.dm_max_flood_attempts
             )
+            cfg.radio_evict_enabled = parser["bot"].getboolean(
+                "radio_evict_enabled", cfg.radio_evict_enabled
+            )
+            cfg.radio_evict_headroom = parser["bot"].getint(
+                "radio_evict_headroom", cfg.radio_evict_headroom
+            )
+            cfg.radio_evict_max_per_run = parser["bot"].getint(
+                "radio_evict_max_per_run", cfg.radio_evict_max_per_run
+            )
+            cfg.radio_evict_min_interval = parser["bot"].getfloat(
+                "radio_evict_min_interval", cfg.radio_evict_min_interval
+            )
+            protect_raw = parser["bot"].get("radio_evict_protect_types", "")
+            if protect_raw.strip():
+                cfg.radio_evict_protect_types = parse_contact_types(
+                    protect_raw, on_error=lambda tok: sys.stderr.write(
+                        f"WARNING: ignoring unknown radio_evict_protect_types "
+                        f"entry {tok!r}\n"
+                    )
+                )
             owners_raw = parser["bot"].get("owner_pubkeys", "")
             if owners_raw:
                 seen = set()
@@ -1045,6 +1109,49 @@ class RepeatWatch:
     done: bool = False
 
 
+# plausible-timestamp window for a contact's last_advert (sender-clock, often
+# garbage): between 2020-01-01 and a day in the future. Outside this, treat as
+# unknown (0) for staleness ordering.
+_TS_MIN = 1577836800   # 2020-01-01 UTC
+
+
+def _contact_staleness_key(c: dict, db_synced_at: dict, now: int) -> tuple:
+    """Lower sorts first (= evicted first). Fuse the most trustworthy
+    last-seen signal available for a radio contact:
+      1. the bot DB's last_synced_at (bot clock; incremental sync makes this
+         ≈ last time the contact changed on the radio),
+      2. else the radio's lastmod (radio clock; absolute value may be off but
+         relative order is consistent),
+      3. else last_advert if it's a plausible timestamp,
+    with (lastmod, pubkey) as a deterministic tie-break."""
+    pk = (c.get("public_key") or "").lower()
+    synced = db_synced_at.get(pk)
+    lastmod = c.get("lastmod") or 0
+    last_advert = c.get("last_advert") or 0
+    if not (_TS_MIN < last_advert < now + 86400):
+        last_advert = 0
+    primary = synced if synced else (lastmod if lastmod > 0 else last_advert)
+    return (primary or 0, lastmod, pk)
+
+
+def select_eviction_victims(
+    contacts: list, *, protected_pubkeys: set, protected_types: set,
+    db_synced_at: dict, need: int, now: int,
+) -> list:
+    """Pick up to `need` contacts to evict from a fresh radio dump, stalest
+    first. Pure (clock injected) so it is unit-testable. `contacts` is a list
+    of radio contact dicts; returns the chosen dicts."""
+    if need <= 0:
+        return []
+    eligible = [
+        c for c in contacts
+        if (c.get("public_key") or "").lower() not in protected_pubkeys
+        and c.get("type") not in protected_types
+    ]
+    eligible.sort(key=lambda c: _contact_staleness_key(c, db_synced_at, now))
+    return eligible[:need]
+
+
 # ---------------------------------------------------------------------------
 # The bot
 #
@@ -1100,6 +1207,14 @@ class MCBot:
         # path (_handle_inbound_channel) also consults them to suppress
         # re-ingesting our own repeated channel message as a phantom inbound.
         self._repeat_watches: list[RepeatWatch] = []
+        # radio contact-table rollover. evict_enabled/evict_headroom are the
+        # runtime-mutable policy (seeded from config; the web UI can change
+        # them until restart). The lock serializes runs; _last_auto_evict
+        # debounces CONTACTS_FULL-triggered runs.
+        self.evict_enabled: bool = cfg.radio_evict_enabled
+        self.evict_headroom: int = cfg.radio_evict_headroom
+        self._evict_lock = asyncio.Lock()
+        self._last_auto_evict: float = 0.0  # monotonic
 
     # channel logging filter
     def _parse_log_channels(self) -> None:
@@ -3111,6 +3226,191 @@ class MCBot:
             )
         return ev
 
+    # ------------------------------------------------------------------
+    # Radio contact-table rollover (eviction)
+    # ------------------------------------------------------------------
+    async def _radio_max_contacts(self, refresh: bool = False) -> Optional[int]:
+        # current radio contact capacity. reads the cached
+        # device_info.max_contacts (already decoded by the lib); re-queries the
+        # radio if absent or refresh=True.
+        if not refresh:
+            row = await self.db.fetchone(
+                "SELECT value FROM device_info "
+                "WHERE key='device_info.max_contacts'"
+            )
+            if row and row["value"]:
+                try:
+                    return int(json.loads(row["value"]))
+                except Exception:
+                    pass
+        try:
+            ev = await self.mc.commands.send_device_query()
+            if ev and isinstance(ev.payload, dict):
+                await self._upsert_device_info(ev.payload, "device_info")
+                mc = ev.payload.get("max_contacts")
+                if isinstance(mc, int):
+                    return mc
+        except Exception:
+            self.logger.exception("device query for max_contacts failed")
+        return None
+
+    async def _eviction_protected_pubkeys(self) -> set:
+        # contacts that must never be evicted: configured owners, all bot
+        # users, and anyone the bot exchanged a DM with in the last 24h.
+        protected = {pk.lower() for pk in self.cfg.owner_pubkeys}
+        for r in await self.db.fetchall("SELECT pubkey FROM bot_users"):
+            if r["pubkey"]:
+                protected.add(r["pubkey"].lower())
+        # outgoing DM rows store the counterparty in sender_pubkey, so one
+        # query covers both directions of a conversation.
+        cutoff = int(time.time()) - 86400
+        rows = await self.db.fetchall(
+            "SELECT DISTINCT sender_pubkey FROM direct_messages "
+            "WHERE received_at > ? AND sender_pubkey IS NOT NULL",
+            (cutoff,),
+        )
+        for r in rows:
+            if r["sender_pubkey"]:
+                protected.add(r["sender_pubkey"].lower())
+        return protected
+
+    async def evict_radio_contacts(
+        self, target_free: Optional[int] = None,
+        count: Optional[int] = None, dry_run: bool = False,
+    ) -> dict:
+        # Evict the stalest contacts from the RADIO to free space. Operates on
+        # a fresh radio dump (the DB archive may hold contacts no longer on the
+        # radio, so victims must come only from the live table) and NEVER
+        # deletes DB rows. Either target_free (keep >= N free slots) or count
+        # (remove up to N) drives the count. Returns a result dict.
+        async with self._evict_lock:
+            try:
+                ev = await self.mc.commands.get_contacts(lastmod=0, timeout=15)
+            except TypeError:
+                ev = await self.mc.commands.get_contacts()
+            except Exception as e:
+                raise RuntimeError(f"could not read radio contacts: {e}")
+            if (
+                not ev or getattr(ev.type, "name", "") == "ERROR"
+                or not isinstance(ev.payload, dict)
+            ):
+                raise RuntimeError("could not read radio contacts")
+            # the contact pubkey is the dict KEY; inject it so downstream code
+            # (and the pure selector) can read c["public_key"].
+            contacts = [
+                {**c, "public_key": pk}
+                for pk, c in ev.payload.items() if isinstance(c, dict)
+            ]
+            used = len(contacts)
+            maxc = await self._radio_max_contacts()
+            now = int(time.time())
+
+            tf = self.evict_headroom if target_free is None else int(target_free)
+            if count is not None:
+                need = max(0, int(count))
+            elif maxc is None:
+                raise RuntimeError(
+                    "radio max contacts unknown; cannot compute headroom"
+                )
+            else:
+                need = max(0, tf - (maxc - used))
+            need = min(need, self.cfg.radio_evict_max_per_run)
+
+            protected = await self._eviction_protected_pubkeys()
+            ptypes = self.cfg.radio_evict_protect_types
+            syncmap: dict = {}
+            for r in await self.db.fetchall(
+                "SELECT public_key, last_synced_at FROM contacts"
+            ):
+                if r["public_key"]:
+                    syncmap[r["public_key"].lower()] = r["last_synced_at"] or 0
+
+            victims = select_eviction_victims(
+                contacts, protected_pubkeys=protected, protected_types=ptypes,
+                db_synced_at=syncmap, need=need, now=now,
+            )
+            eligible_total = sum(
+                1 for c in contacts
+                if (c.get("public_key") or "").lower() not in protected
+                and c.get("type") not in ptypes
+            )
+            result = {
+                "used": used, "max": maxc,
+                "free_before": (maxc - used) if maxc is not None else None,
+                "target_free": (None if count is not None else tf),
+                "protected": len(protected), "eligible": eligible_total,
+                "evicted": [], "failed": 0, "shortfall": 0, "dry_run": dry_run,
+            }
+            if dry_run:
+                result["evicted"] = [
+                    {"pubkey": c["public_key"], "name": c.get("adv_name")}
+                    for c in victims
+                ]
+                result["shortfall"] = max(0, need - len(victims))
+                return result
+
+            consecutive_err = 0
+            for c in victims:
+                pk = c["public_key"]
+                rev = await self.remove_contact_remote(pk)
+                ok = rev is not None and getattr(rev.type, "name", "") != "ERROR"
+                if ok:
+                    consecutive_err = 0
+                    try:  # keep the lib's contact cache in step (send_dm reads it)
+                        cache = getattr(self.mc, "contacts", None)
+                        if isinstance(cache, dict):
+                            cache.pop(pk, None)
+                    except Exception:
+                        pass
+                    result["evicted"].append(
+                        {"pubkey": pk, "name": c.get("adv_name")}
+                    )
+                else:
+                    result["failed"] += 1
+                    consecutive_err += 1
+                    if consecutive_err >= 3:
+                        self.logger.warning(
+                            "radio eviction aborted after 3 consecutive errors"
+                        )
+                        break
+            if result["evicted"]:
+                self._contacts_dirty = True
+            result["shortfall"] = max(0, need - len(result["evicted"]))
+            self.logger.info(
+                "radio eviction: used=%s max=%s evicted=%d failed=%d "
+                "shortfall=%d (protected=%d eligible=%d)",
+                used, maxc, len(result["evicted"]), result["failed"],
+                result["shortfall"], len(protected), eligible_total,
+            )
+            return result
+
+    async def _on_contacts_full(self, event) -> None:
+        if not self.evict_enabled:
+            self.logger.debug(
+                "CONTACTS_FULL received but radio_evict_enabled is off"
+            )
+            return
+        nowm = time.monotonic()
+        if nowm - self._last_auto_evict < self.cfg.radio_evict_min_interval:
+            self.logger.debug("CONTACTS_FULL within debounce window; skipping")
+            return
+        self._last_auto_evict = nowm
+        self.logger.info(
+            "CONTACTS_FULL: radio contact table full; evicting stale contacts"
+        )
+
+        async def _run():
+            try:
+                await self.evict_radio_contacts(target_free=self.evict_headroom)
+            except Exception:
+                self.logger.exception("auto eviction (CONTACTS_FULL) failed")
+
+        asyncio.create_task(_run())
+
+    async def _on_contact_deleted(self, event) -> None:
+        # firmware removed/overwrote a contact — refresh the DB view next tick
+        self._contacts_dirty = True
+
     async def send_advert(self, flood: bool):
         label = "flood" if flood else "zero-hop"
         self.logger.info("sending %s advert", label)
@@ -3280,6 +3580,23 @@ class MCBot:
         await self._bootstrap_admin_state()
         await self.seed_command_configs()
 
+        # ensure radio contact-table headroom on startup (device_info +
+        # contacts have been synced above; owners are bootstrapped into
+        # bot_users, so the protected set is ready).
+        if self.evict_enabled:
+            try:
+                self._last_auto_evict = time.monotonic()
+                res = await self.evict_radio_contacts(
+                    target_free=self.evict_headroom
+                )
+                if res.get("evicted"):
+                    self.logger.info(
+                        "startup eviction freed %d radio contact slot(s)",
+                        len(res["evicted"]),
+                    )
+            except Exception:
+                self.logger.exception("startup radio eviction failed")
+
         # subscriptions
         try:
             self._subs.append(self.mc.subscribe(None, self._firehose))
@@ -3311,6 +3628,18 @@ class MCBot:
                 self._subs.append(
                     self.mc.subscribe(
                         EventType.NEW_CONTACT, self._on_new_contact
+                    )
+                )
+            if hasattr(EventType, "CONTACTS_FULL"):
+                self._subs.append(
+                    self.mc.subscribe(
+                        EventType.CONTACTS_FULL, self._on_contacts_full
+                    )
+                )
+            if hasattr(EventType, "CONTACT_DELETED"):
+                self._subs.append(
+                    self.mc.subscribe(
+                        EventType.CONTACT_DELETED, self._on_contact_deleted
                     )
                 )
             if hasattr(EventType, "MESSAGES_WAITING"):
