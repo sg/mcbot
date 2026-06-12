@@ -23,7 +23,7 @@ const notice = ref('')
 // add-form state
 const newChannel = ref({ name: '', key: '' })
 const newGroup = ref({ name: '', commands: '' })
-const newUser = ref({ sel: '', group: '' }) // create-bot-user form (Contacts tab)
+const newUser = ref({ sel: '', group: '' }) // create-bot-user form (Users tab)
 
 const endpoints = {
   stats: '/stats',
@@ -61,7 +61,7 @@ async function loadTab(key, force = false) {
     const r = await api(endpoints[key])
     data.value[key] = decorate(key, r)
     if (key === 'contacts') rememberContactTypes(data.value[key])
-    // users/groups tabs (and the Contacts "create bot user" form) need the
+    // users/groups tabs (and the Users "create bot user" form) need the
     // list of group names for their group pickers.
     if (
       (key === 'users' || key === 'groups' || key === 'contacts') &&
@@ -69,6 +69,12 @@ async function loadTab(key, force = false) {
     ) {
       const g = await api('/groups')
       groupNames.value = g.items.map((x) => x.name)
+    }
+    // The Users tab hosts the "create bot user from a contact" form, whose
+    // picker needs the contact list.
+    if (key === 'users' && !data.value.contacts) {
+      const c = await api(endpoints.contacts)
+      data.value.contacts = decorate('contacts', c)
     }
     // Groups tab's grant picker needs the universe of command names.
     if (key === 'groups' && !commandNames.value.length) {
@@ -404,7 +410,7 @@ function fmtLocalDateTime(ts) {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
 
-// ---- create a bot user from a contact (Contacts tab toolbar) ----
+// ---- create a bot user from a contact (Users tab toolbar) ----
 // Groups that can be an initial membership: 'public' is an all-users flag
 // (not a membership) and 'blocked' is set via block(), so both are excluded.
 const assignableGroups = computed(() =>
@@ -443,7 +449,7 @@ async function createUser() {
     })
     notice.value = `bot user created and added to ${newUser.value.group}`
     newUser.value = { sel: '', group: '' }
-    delete data.value.users // force the Users tab to refetch with the new row
+    await reload('users') // refresh the Users table so the new row shows now
   } catch (e) {
     // e.g. 409 when a bot user already exists for this contact
     alert(e.message)
@@ -719,6 +725,33 @@ onMounted(() => loadTab('stats'))
 
         <!-- Users (editable) -->
         <div v-else-if="active === 'users'">
+          <!-- Create a bot user from a contact + an initial group. -->
+          <div class="toolbar">
+            <input
+              v-model="newUser.sel"
+              list="newUserContacts"
+              placeholder="add bot user: search a contact…"
+              style="flex: 0 0 320px"
+            />
+            <datalist id="newUserContacts">
+              <option
+                v-for="c in data.contacts || []"
+                :key="c.public_key"
+                :value="contactOptionLabel(c)"
+              />
+            </datalist>
+            <select v-model="newUser.group">
+              <option value="">initial group…</option>
+              <option v-for="g in assignableGroups" :key="g" :value="g">{{ g }}</option>
+            </select>
+            <button
+              :disabled="!selectedNewUserPubkey() || !newUser.group"
+              @click="createUser"
+            >
+              Add bot user
+            </button>
+          </div>
+
           <table>
             <thead>
               <tr>
@@ -845,33 +878,6 @@ onMounted(() => loadTab('stats'))
 
         <!-- Contacts (search + type-filter + click-sort) -->
         <div v-else-if="active === 'contacts'">
-          <!-- Create a bot user from a contact + an initial group. -->
-          <div class="toolbar">
-            <input
-              v-model="newUser.sel"
-              list="newUserContacts"
-              placeholder="add bot user: search a contact…"
-              style="flex: 0 0 320px"
-            />
-            <datalist id="newUserContacts">
-              <option
-                v-for="c in data.contacts || []"
-                :key="c.public_key"
-                :value="contactOptionLabel(c)"
-              />
-            </datalist>
-            <select v-model="newUser.group">
-              <option value="">initial group…</option>
-              <option v-for="g in assignableGroups" :key="g" :value="g">{{ g }}</option>
-            </select>
-            <button
-              :disabled="!selectedNewUserPubkey() || !newUser.group"
-              @click="createUser"
-            >
-              Add bot user
-            </button>
-          </div>
-
           <div class="toolbar">
             <input
               v-model="contactSearch"
