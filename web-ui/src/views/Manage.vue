@@ -462,6 +462,41 @@ const contactKnownTypes = ref(new Set()) // accumulates as rows arrive
 const contactSort = ref({ col: 'adv_name', dir: 'asc' })
 const selectedContacts = ref(new Set()) // public_keys marked for deletion
 
+// ---- contact detail pane (click a row to inspect) ----
+// Track by pubkey (not the row object) so the selection survives a contacts
+// reload; detailContact resolves to null if the row is gone (e.g. deleted).
+const detailPubkey = ref(null)
+const detailContact = computed(
+  () => (data.value.contacts || []).find((c) => c.public_key === detailPubkey.value) || null,
+)
+function selectContact(c) {
+  detailPubkey.value = c.public_key
+}
+// Ordered [label, value, mono?] rows rendered in the detail pane.
+const contactDetailFields = computed(() => {
+  const c = detailContact.value
+  if (!c) return []
+  let outPath
+  if (c.out_path_len === -1) outPath = 'flood (no path)'
+  else if (c.out_path_len === 0) outPath = 'direct (0 hops)'
+  else if (c.out_path) outPath = `${c.out_path} (${c.out_path_len} hop${c.out_path_len === 1 ? '' : 's'})`
+  else outPath = `${c.out_path_len ?? '?'} hop(s)`
+  const loc = c.adv_lat != null && c.adv_lon != null ? `${c.adv_lat}, ${c.adv_lon}` : '—'
+  return [
+    ['name', c.adv_name || '—', false],
+    ['type', typeLabel(c.type), false],
+    ['public key', c.public_key, true],
+    ['flags', c.flags ?? '—', false],
+    ['out path', outPath, true],
+    ['path hash mode', c.out_path_hash_mode ?? '—', false],
+    ['location (lat, lon)', loc, false],
+    ['last advert', fmtLocalDateTime(c.last_advert) || '—', false],
+    ['last modified', fmtLocalDateTime(c.lastmod) || '—', false],
+    ['first seen', fmtLocalDateTime(c.first_seen_at) || '—', false],
+    ['last synced', fmtLocalDateTime(c.last_synced_at) || '—', false],
+  ]
+})
+
 const contactTypes = computed(() => [...contactKnownTypes.value].sort())
 const contactAllChecked = computed(() => contactExcluded.value.size === 0)
 const contactTypeChecked = (label) => !contactExcluded.value.has(label)
@@ -877,82 +912,108 @@ onMounted(() => loadTab('stats'))
         </div>
 
         <!-- Contacts (search + type-filter + click-sort) -->
-        <div v-else-if="active === 'contacts'">
-          <div class="toolbar">
-            <input
-              v-model="contactSearch"
-              placeholder="search name or pubkey…"
-              style="flex: 0 0 260px"
-            />
-            <label class="chk">
+        <div v-else-if="active === 'contacts'" class="contacts-split">
+          <div class="pane" style="flex: 1.6; min-width: 0">
+            <div class="toolbar">
               <input
-                type="checkbox"
-                :checked="contactAllChecked"
-                @change="toggleContactAll($event.target.checked)"
+                v-model="contactSearch"
+                placeholder="search name or pubkey…"
+                style="flex: 0 0 260px"
               />
-              All
-            </label>
-            <label v-for="t in contactTypes" :key="t" class="chk">
-              <input
-                type="checkbox"
-                :checked="contactTypeChecked(t)"
-                @change="toggleContactType(t, $event.target.checked)"
-              />
-              {{ t }}
-            </label>
-            <button :disabled="!canDeleteContacts" @click="deleteSelectedContacts">
-              Delete{{ canDeleteContacts ? ` (${selectedContactRows.length})` : '' }}
-            </button>
-            <span class="muted">{{ visibleContacts.length }} shown</span>
+              <label class="chk">
+                <input
+                  type="checkbox"
+                  :checked="contactAllChecked"
+                  @change="toggleContactAll($event.target.checked)"
+                />
+                All
+              </label>
+              <label v-for="t in contactTypes" :key="t" class="chk">
+                <input
+                  type="checkbox"
+                  :checked="contactTypeChecked(t)"
+                  @change="toggleContactType(t, $event.target.checked)"
+                />
+                {{ t }}
+              </label>
+              <button :disabled="!canDeleteContacts" @click="deleteSelectedContacts">
+                Delete{{ canDeleteContacts ? ` (${selectedContactRows.length})` : '' }}
+              </button>
+              <span class="muted">{{ visibleContacts.length }} shown</span>
+            </div>
+            <div class="body">
+              <table>
+                <thead>
+                  <tr>
+                    <th style="width: 24px"></th>
+                    <th class="sortable" @click="sortContacts('public_key')">
+                      pubkey<span v-if="contactSort.col === 'public_key'">
+                        {{ contactSort.dir === 'asc' ? '▲' : '▼' }}</span>
+                    </th>
+                    <th class="sortable" @click="sortContacts('adv_name')">
+                      name<span v-if="contactSort.col === 'adv_name'">
+                        {{ contactSort.dir === 'asc' ? '▲' : '▼' }}</span>
+                    </th>
+                    <th class="sortable" @click="sortContacts('type')">
+                      type<span v-if="contactSort.col === 'type'">
+                        {{ contactSort.dir === 'asc' ? '▲' : '▼' }}</span>
+                    </th>
+                    <th class="sortable" @click="sortContacts('adv_lat')">
+                      lat<span v-if="contactSort.col === 'adv_lat'">
+                        {{ contactSort.dir === 'asc' ? '▲' : '▼' }}</span>
+                    </th>
+                    <th class="sortable" @click="sortContacts('adv_lon')">
+                      lon<span v-if="contactSort.col === 'adv_lon'">
+                        {{ contactSort.dir === 'asc' ? '▲' : '▼' }}</span>
+                    </th>
+                    <th class="sortable" @click="sortContacts('last_synced_at')">
+                      last synced<span v-if="contactSort.col === 'last_synced_at'">
+                        {{ contactSort.dir === 'asc' ? '▲' : '▼' }}</span>
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr
+                    v-for="c in visibleContacts"
+                    :key="c.public_key"
+                    class="clickable"
+                    :class="{ selected: detailContact && detailContact.public_key === c.public_key }"
+                    @click="selectContact(c)"
+                  >
+                    <td>
+                      <input
+                        type="checkbox"
+                        :checked="selectedContacts.has(c.public_key)"
+                        @change="toggleContactSelected(c.public_key)"
+                        @click.stop
+                      />
+                    </td>
+                    <td class="mono" :title="c.public_key">{{ shortKey(c.public_key) }}</td>
+                    <td>{{ c.adv_name || '' }}</td>
+                    <td>{{ typeLabel(c.type) }}</td>
+                    <td>{{ c.adv_lat ?? '' }}</td>
+                    <td>{{ c.adv_lon ?? '' }}</td>
+                    <td>{{ fmtLocalDateTime(c.last_synced_at) }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
           </div>
-          <table>
-            <thead>
-              <tr>
-                <th style="width: 24px"></th>
-                <th class="sortable" @click="sortContacts('public_key')">
-                  pubkey<span v-if="contactSort.col === 'public_key'">
-                    {{ contactSort.dir === 'asc' ? '▲' : '▼' }}</span>
-                </th>
-                <th class="sortable" @click="sortContacts('adv_name')">
-                  name<span v-if="contactSort.col === 'adv_name'">
-                    {{ contactSort.dir === 'asc' ? '▲' : '▼' }}</span>
-                </th>
-                <th class="sortable" @click="sortContacts('type')">
-                  type<span v-if="contactSort.col === 'type'">
-                    {{ contactSort.dir === 'asc' ? '▲' : '▼' }}</span>
-                </th>
-                <th class="sortable" @click="sortContacts('adv_lat')">
-                  lat<span v-if="contactSort.col === 'adv_lat'">
-                    {{ contactSort.dir === 'asc' ? '▲' : '▼' }}</span>
-                </th>
-                <th class="sortable" @click="sortContacts('adv_lon')">
-                  lon<span v-if="contactSort.col === 'adv_lon'">
-                    {{ contactSort.dir === 'asc' ? '▲' : '▼' }}</span>
-                </th>
-                <th class="sortable" @click="sortContacts('last_synced_at')">
-                  last synced<span v-if="contactSort.col === 'last_synced_at'">
-                    {{ contactSort.dir === 'asc' ? '▲' : '▼' }}</span>
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="c in visibleContacts" :key="c.public_key">
-                <td>
-                  <input
-                    type="checkbox"
-                    :checked="selectedContacts.has(c.public_key)"
-                    @change="toggleContactSelected(c.public_key)"
-                  />
-                </td>
-                <td class="mono" :title="c.public_key">{{ shortKey(c.public_key) }}</td>
-                <td>{{ c.adv_name || '' }}</td>
-                <td>{{ typeLabel(c.type) }}</td>
-                <td>{{ c.adv_lat ?? '' }}</td>
-                <td>{{ c.adv_lon ?? '' }}</td>
-                <td>{{ fmtLocalDateTime(c.last_synced_at) }}</td>
-              </tr>
-            </tbody>
-          </table>
+
+          <div class="pane contact-detail">
+            <h3>Contact</h3>
+            <div class="body">
+              <div v-if="!detailContact" class="empty">select a contact</div>
+              <div v-else class="decoded">
+                <div class="kv">
+                  <template v-for="f in contactDetailFields" :key="f[0]">
+                    <div class="k">{{ f[0] }}</div>
+                    <div :class="{ mono: f[2] }" style="word-break: break-all">{{ f[1] }}</div>
+                  </template>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
 
         <!-- Read-only generic table (audit) -->
@@ -973,3 +1034,21 @@ onMounted(() => loadTab('stats'))
     </div>
   </div>
 </template>
+
+<style scoped>
+/* Contacts tab: list on the left, detail pane on the right (each scrolls
+   independently), mirroring the Packets screen's inspector layout. */
+.contacts-split {
+  display: flex;
+  gap: 10px;
+  height: 100%;
+  min-height: 0;
+  padding: 10px;
+  box-sizing: border-box;
+}
+.contact-detail {
+  flex: 1;
+  min-width: 240px;
+  max-width: 440px;
+}
+</style>
