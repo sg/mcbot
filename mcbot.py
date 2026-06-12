@@ -1100,6 +1100,11 @@ class RepeatWatch:
     dest_byte: Optional[int] = None        # recipient pubkey first byte (dm)
     channel_idx: Optional[int] = None      # (channel)
     disp_name: str = ""
+    # how the send was routed, derived from the contact's out_path_len:
+    # "flood" (-1), "direct_0hop" (0, neighbor — no repeater can rebroadcast),
+    # "direct_multihop" (>=1), or "unknown". Used so a 0-hop direct DM that
+    # legitimately has no repeater is labelled DIRECT_0HOP, not NO_REPEAT.
+    route_mode: str = "unknown"
     registered_at: float = 0.0             # monotonic, at send start
     send_completed_at: Optional[float] = None
     seen_frames: set = field(default_factory=set)   # {(pkt_hash, path_hex)}
@@ -1678,7 +1683,7 @@ class MCBot:
         self, *, kind: str, text: str,
         dest_pubkey: Optional[str] = None,
         channel_idx: Optional[int] = None,
-        disp_name: str = "",
+        disp_name: str = "", route_mode: str = "unknown",
     ) -> Optional[RepeatWatch]:
         # build + register a watch (no timer yet — see _start_repeat_timer).
         # returns None (inert) when tracking is off or we can't detect repeats.
@@ -1702,7 +1707,8 @@ class MCBot:
         w = RepeatWatch(
             kind=kind, text=text, dest_pubkey=dest_pubkey,
             dest_byte=dest_byte, channel_idx=channel_idx,
-            disp_name=disp_name, registered_at=time.monotonic(),
+            disp_name=disp_name, route_mode=route_mode,
+            registered_at=time.monotonic(),
         )
         self._repeat_watches.append(w)
         # bound memory: drop the oldest if we somehow accumulate too many
@@ -1880,12 +1886,25 @@ class MCBot:
             target = f"ch={watch.channel_idx}"
         else:
             target = f"to={watch.disp_name or (watch.dest_pubkey or '')[:12]}"
-        self.logger.info(
-            "NO_REPEAT %s: no repeater heard within %.0fs: %r",
-            target, self.cfg.repeat_timeout, snippet,
-        )
+        # A 0-hop direct DM goes straight to a neighbor with no repeater in the
+        # path, so "no repeat heard" is expected, not a propagation failure —
+        # label it DIRECT_0HOP. Everything else (flood, multi-hop, unknown) is
+        # a genuine "sent where a repeater could have rebroadcast, but none
+        # was heard" → NO_REPEAT.
+        if watch.kind == "dm" and watch.route_mode == "direct_0hop":
+            self.logger.info(
+                "DIRECT_0HOP %s: delivered direct to neighbor, "
+                "no repeater involved: %r", target, snippet,
+            )
+            packet_type = "DIRECT_0HOP"
+        else:
+            self.logger.info(
+                "NO_REPEAT %s: no repeater heard within %.0fs: %r",
+                target, self.cfg.repeat_timeout, snippet,
+            )
+            packet_type = "NO_REPEAT"
         await self._emit_synthetic_packet(
-            packet_type="NO_REPEAT",
+            packet_type=packet_type,
             text=watch.text,
             channel_idx=watch.channel_idx,
             sender_name=watch.disp_name if watch.kind == "dm" else None,
@@ -3180,12 +3199,25 @@ class MCBot:
         lib_contacts = getattr(self.mc, "contacts", None)
         if isinstance(lib_contacts, dict):
             contact = lib_contacts.get(pk)
+        # classify the route so a 0-hop direct delivery (no repeater possible)
+        # is reported as DIRECT_0HOP rather than a misleading NO_REPEAT.
+        # out_path_len: -1 = flood, 0 = direct neighbor, >=1 = multi-hop path.
+        route_mode = "unknown"
+        if isinstance(contact, dict):
+            opl = contact.get("out_path_len")
+            if opl == -1:
+                route_mode = "flood"
+            elif opl == 0:
+                route_mode = "direct_0hop"
+            elif isinstance(opl, int) and opl >= 1:
+                route_mode = "direct_multihop"
         # register the repeat-watch BEFORE sending: send_msg_with_retry can
         # block for seconds across retries, during which repeaters may already
         # be rebroadcasting the first attempt. the no-repeat timer is started
         # only after the send returns (see _start_repeat_timer).
         watch = self._register_repeat_watch(
             kind="dm", text=text, dest_pubkey=pk, disp_name=to_disp,
+            route_mode=route_mode,
         )
         t0 = time.monotonic()
         ev = await self.mc.commands.send_msg_with_retry(

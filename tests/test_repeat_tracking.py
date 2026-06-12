@@ -187,6 +187,33 @@ async def test_no_repeat_timer():
     bot.db.close()
 
 
+async def test_direct_0hop_label():
+    print("test_direct_0hop_label")
+    bot, _our_priv, _our_pub = make_bot(repeat_timeout=0.05)
+    their_pub = derive_public_key(os.urandom(64))
+    # a 0-hop direct DM has no repeater in its path -> DIRECT_0HOP, not NO_REPEAT
+    w = bot._register_repeat_watch(
+        kind="dm", text="hi", dest_pubkey=their_pub.hex(),
+        disp_name="bob", route_mode="direct_0hop",
+    )
+    check(w is not None and w.route_mode == "direct_0hop", "route_mode stored")
+    bot._start_repeat_timer(w)
+    await asyncio.sleep(0.2)
+    check(await count_rows(bot, "DIRECT_0HOP") == 1, "DIRECT_0HOP row emitted")
+    check(await count_rows(bot, "NO_REPEAT") == 0, "no NO_REPEAT for 0-hop DM")
+
+    # a flooded DM with no repeater heard is still a genuine NO_REPEAT
+    w2 = bot._register_repeat_watch(
+        kind="dm", text="yo", dest_pubkey=their_pub.hex(),
+        disp_name="bob", route_mode="flood",
+    )
+    bot._start_repeat_timer(w2)
+    await asyncio.sleep(0.2)
+    check(await count_rows(bot, "NO_REPEAT") == 1, "flood DM -> NO_REPEAT")
+    check(await count_rows(bot, "DIRECT_0HOP") == 1, "flood DM not DIRECT_0HOP")
+    bot.db.close()
+
+
 async def test_repeat_before_timeout_no_norepeat():
     print("test_repeat_before_timeout_no_norepeat")
     bot, *_ = make_bot(repeat_timeout=0.2)
@@ -258,6 +285,7 @@ async def main():
         test_multi_repeater_and_frame_dedup,
         test_retry_attempts_same_text,
         test_no_repeat_timer,
+        test_direct_0hop_label,
         test_repeat_before_timeout_no_norepeat,
         test_self_echo_suppression,
         test_disabled_config,

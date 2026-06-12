@@ -70,11 +70,13 @@ enabled = true
 ; Track repeaters rebroadcasting the bot's OWN sent messages. When a DM or
 ; channel message the bot sent is heard being repeated on RF, each repeat is
 ; logged and shown on the web Packets screen (packet_type REPEAT). If no
-; repeater is heard within repeat_timeout seconds, a NO_REPEAT row is logged
-; + shown. "No repeat" means none was HEARD within the window (a direct-routed
-; DM may be forwarded out of earshot), not that delivery failed. Detection runs
-; on the always-on packet firehose, so it works even with rx_log_decrypt=false.
-; Default: true / 5 seconds.
+; repeater is heard within repeat_timeout seconds a NO_REPEAT row is logged +
+; shown — except a DM sent direct to a 0-hop neighbor, which has no repeater in
+; its path and is labelled DIRECT_0HOP (delivered direct, nothing to repeat —
+; expected, not a failure). NO_REPEAT thus means "sent where a repeater could
+; have rebroadcast (flood/multi-hop), but none was HEARD in the window," not
+; that delivery failed. Detection runs on the always-on packet firehose, so it
+; works even with rx_log_decrypt=false. Default: true / 5 seconds.
 ;repeat_tracking = true
 ;repeat_timeout = 5
 ; Path to the exported radio private key (0600). Default: <db>.privkey
