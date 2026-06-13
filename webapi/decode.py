@@ -124,11 +124,44 @@ async def _decode_payload(payload_type: int, payload: bytes, bot) -> dict:
     if payload_type == mcbot.PayloadType.TEXT_MESSAGE.value:
         return await _decode_dm(payload, bot)
     if payload_type == mcbot.PayloadType.ADVERT.value:
-        res = {"type": "advert"}
-        if len(payload) >= 32:
-            res["public_key"] = payload[:32].hex()
-        return res
+        return _decode_advert(payload)
     return {"type": _payload_type_name(payload_type), "note": "no decoder"}
+
+
+def _decode_advert(payload: bytes) -> dict:
+    # advert body: public_key(32) + timestamp(4 LE) + signature(64) + flags(1),
+    # then optional lat/lon, feature words, and the node name — each gated by a
+    # flag bit. Mirrors the meshcore library's advert parser so the node's name
+    # (self-described in the advert) shows in the decode pane.
+    res = {"type": "advert"}
+    if len(payload) >= 32:
+        res["public_key"] = payload[:32].hex()
+    if len(payload) >= 36:
+        res["timestamp"] = int.from_bytes(payload[32:36], "little")
+    if len(payload) < 101:
+        return res
+    flags = payload[100]
+    res["adv_type"] = flags & 0x0F
+    off = 101
+    if flags & 0x10:  # has location: lat(4) + lon(4), signed LE, /1e6
+        if len(payload) < off + 8:
+            return res
+        res["lat"] = int.from_bytes(payload[off:off + 4], "little", signed=True) / 1e6
+        res["lon"] = int.from_bytes(payload[off + 4:off + 8], "little", signed=True) / 1e6
+        off += 8
+    if flags & 0x20:  # feature1 (2 bytes)
+        if len(payload) < off + 2:
+            return res
+        off += 2
+    if flags & 0x40:  # feature2 (2 bytes)
+        if len(payload) < off + 2:
+            return res
+        off += 2
+    if flags & 0x80:  # has name: remaining bytes, UTF-8
+        name = payload[off:].decode("utf-8", "ignore").strip("\x00")
+        if name:
+            res["name"] = name
+    return res
 
 
 async def _decode_channel(payload: bytes, bot) -> dict:
