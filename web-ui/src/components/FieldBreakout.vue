@@ -1,10 +1,20 @@
 <script setup>
+import { fmtDateTime } from '../time.js'
+
 const props = defineProps({
   fields: { type: Array, default: () => [] },
   decoded: { type: Object, default: null },
   activeIndex: { type: Number, default: -1 },
 })
 const emit = defineEmits(['hover-field'])
+
+// epoch-seconds keys in the decoded payload get an ISO date-time, not a raw int
+function isTimeKey(k) {
+  return k === 'timestamp' || k.endsWith('_timestamp') || k.endsWith('_at')
+}
+function fmtDecoded(k, v) {
+  return isTimeKey(k) ? fmtDateTime(v) : fmtValue(v)
+}
 
 function fmtValue(v) {
   if (v === null || v === undefined) return ''
@@ -37,7 +47,7 @@ function fmtValue(v) {
       <div class="kv">
         <template v-for="(v, k) in decoded" :key="k">
           <div class="k">{{ k }}</div>
-          <div class="mono">{{ fmtValue(v) }}</div>
+          <div class="mono">{{ fmtDecoded(k, v) }}</div>
         </template>
       </div>
     </div>
