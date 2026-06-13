@@ -708,6 +708,12 @@ def load_config(args) -> Config:
 # ---------------------------------------------------------------------------
 # Logging
 #
+def effective_log_level(cfg: Config) -> str:
+    """The level both the bot and meshcore library loggers should use:
+    --debug forces DEBUG, otherwise [logging] log_level."""
+    return "DEBUG" if cfg.debug else (cfg.log_level or "INFO").upper()
+
+
 def setup_logging(cfg: Config) -> logging.Logger:
     # configure (or re-configure on !adm restart) the mcbot and meshcore
     # loggers. rebuild handlers from scratch so a restart picks up a
@@ -733,10 +739,10 @@ def setup_logging(cfg: Config) -> logging.Logger:
 
     # --debug is a shortcut for the most verbose logging; otherwise BOTH the
     # bot's own logger and the meshcore library logger follow [logging]
-    # log_level. Previously the library logger was pinned to INFO unless
-    # --debug was passed, so setting log_level=DEBUG in mcbot.conf appeared to
-    # do nothing (the bulk of "debug" output comes from the library logger).
-    level = "DEBUG" if cfg.debug else cfg.log_level.upper()
+    # log_level. NOTE: MeshCore.create_*() re-sets the "meshcore" logger level
+    # from its `debug` arg at connect time (overriding what we set here), so
+    # run() must re-assert it after connecting — see effective_log_level usage.
+    level = effective_log_level(cfg)
     bot_log = _reset("mcbot", level)
     mc_log = _reset("meshcore", level)
 
@@ -3563,13 +3569,21 @@ class MCBot:
         )
         self.logger.info("=" * 60)
 
+        # MeshCore.__init__ forces the "meshcore" logger level from its `debug`
+        # arg (debug -> DEBUG, else INFO), overriding setup_logging. Drive that
+        # arg from our effective level, then re-assert the level after connect
+        # so log_level=DEBUG in mcbot.conf turns on the library's verbose output
+        # without needing --debug (and so the TypeError fallback / WARNING /
+        # ERROR levels are honored too).
+        eff_level = effective_log_level(self.cfg)
+        want_debug = eff_level == "DEBUG"
         try:
             if self.cfg.transport == "serial":
                 try:
                     self.mc = await MeshCore.create_serial(
                         self.cfg.serial_port,
                         baudrate=self.cfg.serial_baud,
-                        debug=self.cfg.debug,
+                        debug=want_debug,
                         auto_reconnect=self.cfg.auto_reconnect,
                     )
                 except TypeError:
@@ -3580,7 +3594,7 @@ class MCBot:
                 try:
                     self.mc = await MeshCore.create_tcp(
                         self.cfg.host, self.cfg.port,
-                        debug=self.cfg.debug,
+                        debug=want_debug,
                         auto_reconnect=self.cfg.auto_reconnect,
                     )
                 except TypeError:
@@ -3591,6 +3605,9 @@ class MCBot:
             self.logger.exception("connect failed (%s)", self.cfg.target_desc())
             self.db.close()
             return 1
+
+        # undo MeshCore.__init__'s override so [logging] log_level wins
+        logging.getLogger("meshcore").setLevel(eff_level)
 
         self.logger.info("connected to %s", self.cfg.target_desc())
 

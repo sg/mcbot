@@ -75,6 +75,23 @@ def main():
     check("logging at DEBUG" in banner and path in banner,
           f"banner shows effective level + config path: {banner!r}")
     os.unlink(path)
+
+    # effective_log_level: --debug forces DEBUG, else log_level
+    c = mcbot.Config(); c.log_level = "DEBUG"; c.debug = False
+    check(mcbot.effective_log_level(c) == "DEBUG", "effective: log_level=DEBUG")
+    c2 = mcbot.Config(); c2.log_level = "INFO"; c2.debug = True
+    check(mcbot.effective_log_level(c2) == "DEBUG", "effective: --debug")
+    c3 = mcbot.Config(); c3.log_level = "WARNING"; c3.debug = False
+    check(mcbot.effective_log_level(c3) == "WARNING", "effective: log_level=WARNING")
+
+    # The real bug: MeshCore.create_*() re-sets the "meshcore" logger from its
+    # debug arg AFTER setup_logging (debug=False -> INFO), so log_level=DEBUG
+    # was lost. run() now re-asserts effective_log_level after connecting.
+    mcbot.setup_logging(c)                                   # sets meshcore DEBUG
+    logging.getLogger("meshcore").setLevel(logging.INFO)     # lib clobbers to INFO
+    logging.getLogger("meshcore").setLevel(mcbot.effective_log_level(c))  # re-assert
+    check(logging.getLevelName(logging.getLogger("meshcore").level) == "DEBUG",
+          "meshcore library override is re-asserted back to DEBUG")
     print()
     if _failures:
         print(f"FAILED: {_failures} check(s)")
