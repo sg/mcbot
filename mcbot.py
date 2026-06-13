@@ -384,6 +384,9 @@ class Config:
     db_path: Path = Path("./mcbot.db")
     logs_dir: Path = Path("./logs")
     log_level: str = "INFO"
+    # path of the config file actually loaded (None if none was found);
+    # recorded so the startup banner can show where settings came from.
+    config_path: Optional[str] = None
     commands_dir: Path = Path("./commands")
     privkey_path: Optional[Path] = None  # default: <db>.privkey
     log_channels: str = "all"
@@ -455,6 +458,7 @@ def load_config(args) -> Config:
 
     config_path = args.config or Path("./mcbot.conf")
     if config_path and Path(config_path).is_file():
+        cfg.config_path = str(config_path)
         # interpolation=None so a literal '%' in any value (api keys,
         # session secrets, [env] values) is passed through untouched
         # instead of being parsed as configparser interpolation syntax.
@@ -748,6 +752,16 @@ def setup_logging(cfg: Config) -> logging.Logger:
     for lg in (bot_log, mc_log):
         lg.addHandler(fh)
         lg.addHandler(ch)
+
+    # startup banner: make the effective level and the config source explicit,
+    # so it's obvious whether log_level from mcbot.conf actually took effect
+    # (and which file was read). At INFO so it shows in the default config and
+    # in the common "expected DEBUG, got INFO" case, without polluting logs.
+    src = "--debug" if cfg.debug else f"log_level={cfg.log_level}"
+    bot_log.info(
+        "logging at %s (%s); config=%s",
+        level, src, cfg.config_path or "(no config file found)",
+    )
 
     return bot_log
 
