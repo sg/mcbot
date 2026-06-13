@@ -48,6 +48,33 @@ def main():
     # a quieter level applies to both as well
     check(levels(log_level="WARNING") == ("WARNING", "WARNING"),
           "log_level=WARNING -> both loggers WARNING")
+
+    # load_config records the config file path (for the startup banner), and
+    # the banner is emitted at INFO with the effective level + source.
+    import io
+    import os
+    import tempfile
+    fd, path = tempfile.mkstemp(suffix=".conf")
+    os.write(fd, b"[radio]\nhost = 1.2.3.4\n\n[logging]\nlog_level = DEBUG\n")
+    os.close(fd)
+    cfg = mcbot.load_config(mcbot.parse_args(["--config", path]))
+    check(cfg.log_level == "DEBUG", "load_config parses log_level=DEBUG")
+    check(cfg.config_path == path, "load_config records the loaded config_path")
+
+    # setup_logging's StreamHandler binds to sys.stderr at construction, so
+    # swap it to capture the banner it prints there.
+    old_stderr = sys.stderr
+    sys.stderr = buf = io.StringIO()
+    try:
+        mcbot.setup_logging(cfg)
+    finally:
+        sys.stderr = old_stderr
+    banner = next(
+        (ln for ln in buf.getvalue().splitlines() if "logging at" in ln), "",
+    )
+    check("logging at DEBUG" in banner and path in banner,
+          f"banner shows effective level + config path: {banner!r}")
+    os.unlink(path)
     print()
     if _failures:
         print(f"FAILED: {_failures} check(s)")
