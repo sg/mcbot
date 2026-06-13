@@ -54,6 +54,9 @@ channels = all
 
 [logging]
 logs_dir = ./logs
+; Applies to BOTH the bot and the meshcore library loggers (DEBUG/INFO/
+; WARNING/ERROR). log_level = DEBUG gives full debug output, including the
+; library's verbose packet logs, and is equivalent to the --debug CLI flag.
 log_level = INFO
 
 [bot]
