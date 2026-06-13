@@ -1,9 +1,9 @@
 # mcbot
 
-A standalone Python bot for [MeshCore](https://meshcore.dev) companion radios.
+A standalone Python bot for [MeshCore](https://meshcore.io) companion radios.
 Connects over TCP (WiFi) or USB-serial, syncs contacts/channels/messages into a
 local SQLite database, logs all observed RF activity, and responds to incoming
-text commands customized via individual python script/modules.
+text commands customized via individual python script/plugins.
 
 Built for MeshCore companion firmware, mcbot handles message delivery via both
 paths the radio firmware offers:
