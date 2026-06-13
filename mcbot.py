@@ -727,11 +727,14 @@ def setup_logging(cfg: Config) -> logging.Logger:
         lg.propagate = False
         return lg
 
-    bot_log = _reset("mcbot", cfg.log_level.upper())
-    mc_log = _reset(
-        "meshcore",
-        logging.DEBUG if cfg.debug else logging.INFO,
-    )
+    # --debug is a shortcut for the most verbose logging; otherwise BOTH the
+    # bot's own logger and the meshcore library logger follow [logging]
+    # log_level. Previously the library logger was pinned to INFO unless
+    # --debug was passed, so setting log_level=DEBUG in mcbot.conf appeared to
+    # do nothing (the bulk of "debug" output comes from the library logger).
+    level = "DEBUG" if cfg.debug else cfg.log_level.upper()
+    bot_log = _reset("mcbot", level)
+    mc_log = _reset("meshcore", level)
 
     fh = logging.handlers.RotatingFileHandler(
         cfg.logs_dir / "mcbot.log",
