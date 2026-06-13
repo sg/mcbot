@@ -1,6 +1,7 @@
 <script setup>
 import { ref, computed, nextTick, onMounted, onUnmounted } from 'vue'
 import { api, wsUrl } from '../api.js'
+import { fmtTime } from '../time.js'
 
 const channels = ref([])
 const selectedCh = ref(null) // channel_idx or 'dm'
@@ -108,10 +109,6 @@ async function send() {
   } finally {
     sending.value = false
   }
-}
-
-function fmtTime(ts) {
-  return ts ? new Date(ts * 1000).toLocaleTimeString() : ''
 }
 
 // Channel messages arrive on-wire as "Name: body" (the radio prepends it

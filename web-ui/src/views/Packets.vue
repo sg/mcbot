@@ -1,6 +1,7 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { api, wsUrl } from '../api.js'
+import { fmtTime } from '../time.js'
 import HexDump from '../components/HexDump.vue'
 import FieldBreakout from '../components/FieldBreakout.vue'
 
@@ -93,9 +94,6 @@ function onHoverOffset(off) {
   activeIndex.value = idx
 }
 
-function fmtTime(ts) {
-  return ts ? new Date(ts * 1000).toLocaleTimeString() : ''
-}
 
 onMounted(() => {
   load()

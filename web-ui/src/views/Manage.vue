@@ -1,6 +1,7 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { api } from '../api.js'
+import { fmtDateTime } from '../time.js'
 
 const tabs = [
   { key: 'stats', label: 'Overview' },
@@ -598,6 +599,11 @@ function cell(v) {
   if (typeof v === 'object') return JSON.stringify(v)
   return String(v)
 }
+// generic-table cell, but render epoch 'ts' columns (the audit log) as ISO
+function cellAt(row, c) {
+  if (c === 'ts' && row[c]) return fmtDateTime(row[c])
+  return cell(row[c])
+}
 
 onMounted(() => loadTab('stats'))
 </script>
@@ -1023,8 +1029,8 @@ onMounted(() => loadTab('stats'))
           </thead>
           <tbody>
             <tr v-for="(row, i) in data[active]" :key="i">
-              <td v-for="c in cols(data[active])" :key="c" :title="cell(row[c])">
-                {{ cell(row[c]) }}
+              <td v-for="c in cols(data[active])" :key="c" :title="cellAt(row, c)">
+                {{ cellAt(row, c) }}
               </td>
             </tr>
           </tbody>
