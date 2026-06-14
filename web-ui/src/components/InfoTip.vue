@@ -53,8 +53,10 @@ const pinned = ref(false)
 .bubble {
   display: none;
   position: absolute;
-  right: 0;
-  top: calc(100% + 6px);
+  /* open to the RIGHT of the icon (empty space), clear of the left menu pane */
+  left: calc(100% + 8px);
+  top: 50%;
+  transform: translateY(-50%);
   z-index: 30;
   width: max-content;
   max-width: 300px;
