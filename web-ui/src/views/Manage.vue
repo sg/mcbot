@@ -62,6 +62,8 @@ async function loadTab(key, force = false) {
     const r = await api(endpoints[key])
     data.value[key] = decorate(key, r)
     if (key === 'contacts') rememberContactTypes(data.value[key])
+    // Radio tab shows the current periodic flood-advert interval.
+    if (key === 'radio') await loadAdvertInterval()
     // users/groups tabs (and the Users "create bot user" form) need the
     // list of group names for their group pickers.
     if (
@@ -233,6 +235,25 @@ async function sendAdvert() {
     `${advertMode.value === 'flood' ? 'flood' : 'zero-hop'} advert sent`,
   )
   advertSending.value = false
+}
+
+// ---- periodic flood advert interval (hours; 0 = disabled) ----
+const advertInterval = ref(0)
+async function loadAdvertInterval() {
+  try {
+    const r = await api('/radio/advert-interval')
+    advertInterval.value = r.interval_hours
+  } catch (e) {
+    error.value = e.message
+  }
+}
+async function applyAdvertInterval() {
+  const n = Number(advertInterval.value)
+  await run(
+    api('/radio/advert-interval', { method: 'POST', json: { interval_hours: n } }),
+    n > 0 ? `Flood advert every ${n}h` : 'Periodic flood advert disabled',
+  )
+  await loadAdvertInterval()
 }
 
 // ---- radio contact-table rollover ----
@@ -673,6 +694,23 @@ onMounted(() => loadTab('stats'))
             </button>
             <span class="muted">
               Zero-hop reaches direct neighbors only; flood propagates through the mesh.
+            </span>
+          </div>
+
+          <div class="toolbar">
+            <label class="chk">
+              Flood advert interval (hours)
+              <input
+                type="number"
+                min="0"
+                v-model.number="advertInterval"
+                style="width: 5em"
+              />
+            </label>
+            <button @click="applyAdvertInterval">Apply</button>
+            <span class="muted">
+              0 = disabled. Bot sends a flood advert every N hours; persists in the
+              database (mcbot.conf only seeds the first-run default).
             </span>
           </div>
 

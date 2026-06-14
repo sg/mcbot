@@ -434,6 +434,11 @@ class Config:
     radio_evict_protect_types: set = field(default_factory=set)
     radio_evict_max_per_run: int = 50      # safety cap on removals per run
     radio_evict_min_interval: float = 120  # seconds debounce for auto runs
+    # Periodic flood-advert interval in hours (0 = disabled). This is only the
+    # SEED: on first run it is written to bot_meta, after which the DB value is
+    # authoritative and runtime-managed (via '!adm advert interval N' and the
+    # web Manage->Radio page). Edit this only to change the first-run default.
+    advert_interval_hours: int = 0
     # --- web admin UI / API ([web] section) ---
     web_enabled: bool = False
     web_host: str = "127.0.0.1" # 0.0.0.0 to expose on all interfaces
@@ -537,6 +542,9 @@ def load_config(args) -> Config:
             )
             cfg.radio_evict_min_interval = parser["bot"].getfloat(
                 "radio_evict_min_interval", cfg.radio_evict_min_interval
+            )
+            cfg.advert_interval_hours = parser["bot"].getint(
+                "advert_interval_hours", cfg.advert_interval_hours
             )
             protect_raw = parser["bot"].get("radio_evict_protect_types", "")
             if protect_raw.strip():
@@ -1243,6 +1251,13 @@ class MCBot:
         self.evict_headroom: int = cfg.radio_evict_headroom
         self._evict_lock = asyncio.Lock()
         self._last_auto_evict: float = 0.0  # monotonic
+        # periodic flood advert. seeded from cfg, then DB-authoritative (loaded
+        # via _load_advert_interval at startup, persisted by set_advert_interval).
+        # _last_flood_advert (monotonic) anchors the schedule; the periodic task
+        # measures the interval from it, and any flood advert (manual or
+        # periodic) refreshes it.
+        self.advert_interval_hours: int = cfg.advert_interval_hours
+        self._last_flood_advert: float = 0.0
 
     # channel logging filter
     def _parse_log_channels(self) -> None:
@@ -3477,7 +3492,45 @@ class MCBot:
                 p.get("error_code") or p.get("code_string"),
                 p.get("reason"),
             )
+        if flood:
+            # anchor the periodic-advert schedule to the most recent flood
+            # advert, whatever its source, so the interval is "at least N hours
+            # between flood adverts".
+            self._last_flood_advert = time.monotonic()
         return ev
+
+    # --- periodic flood advert (interval seeded from config, then DB-managed) ---
+    async def _load_advert_interval(self) -> None:
+        # DB is authoritative; seed it from config on first run (key absent).
+        row = await self.db.fetchone(
+            "SELECT value FROM bot_meta WHERE key='advert_interval_hours'"
+        )
+        val = row["value"] if row else None
+        if val is not None and str(val).lstrip("-").isdigit():
+            self.advert_interval_hours = max(0, int(val))
+        else:
+            self.advert_interval_hours = self.cfg.advert_interval_hours
+            await self.db.execute(
+                "INSERT INTO bot_meta(key,value) VALUES('advert_interval_hours',?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (str(self.advert_interval_hours),),
+            )
+
+    async def set_advert_interval(self, hours: int) -> None:
+        # update the runtime value, persist to the DB, and restart the schedule
+        # from now (so a change doesn't trigger an immediate overdue advert).
+        self.advert_interval_hours = max(0, int(hours))
+        self._last_flood_advert = time.monotonic()
+        await self.db.execute(
+            "INSERT INTO bot_meta(key,value) VALUES('advert_interval_hours',?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (str(self.advert_interval_hours),),
+        )
+        self.logger.info(
+            "flood advert interval set to %dh%s",
+            self.advert_interval_hours,
+            " (disabled)" if self.advert_interval_hours == 0 else "",
+        )
 
     async def send_channel_text(self, channel_idx: int, text: str):
         # single-shot channel send (channel messages have no ACK). returns
@@ -3645,6 +3698,7 @@ class MCBot:
         await self._program_channels_on_radio()
         await self._bootstrap_admin_state()
         await self.seed_command_configs()
+        await self._load_advert_interval()
 
         # ensure radio contact-table headroom on startup (device_info +
         # contacts have been synced above; owners are bootstrapped into
@@ -3750,7 +3804,31 @@ class MCBot:
                     except Exception:
                         self.logger.exception("periodic contacts sync failed")
 
+        async def periodic_advert():
+            # anchor the schedule to startup so the first periodic advert is a
+            # full interval away (no immediate flood on boot). Reads the
+            # runtime-mutable interval each tick, so changes take effect within
+            # the poll period without a restart.
+            self._last_flood_advert = time.monotonic()
+            while not self.stop_event.is_set():
+                try:
+                    await asyncio.wait_for(self.stop_event.wait(), timeout=60.0)
+                    break
+                except asyncio.TimeoutError:
+                    pass
+                hrs = self.advert_interval_hours
+                if hrs and hrs > 0:
+                    if time.monotonic() >= self._last_flood_advert + hrs * 3600:
+                        try:
+                            self.logger.info(
+                                "periodic flood advert (every %dh)", hrs
+                            )
+                            await self.send_advert(flood=True)
+                        except Exception:
+                            self.logger.exception("periodic flood advert failed")
+
         periodic_task = asyncio.create_task(periodic_contacts())
+        advert_task = asyncio.create_task(periodic_advert())
 
         self._start_web()
 
@@ -3758,7 +3836,7 @@ class MCBot:
         try:
             await self.stop_event.wait()
         finally:
-            await self.shutdown([periodic_task])
+            await self.shutdown([periodic_task, advert_task])
         return 0
 
     def _start_web(self) -> None:

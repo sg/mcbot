@@ -62,6 +62,7 @@ _HELP = [
     ("command channel remove <cmd> <ch>", "stop a command responding on a channel"),
     ("radio pathhash [1|2|3]",           "show/set this radio's outgoing path-hash width"),
     ("advert <flood|zero>",              "send a flood or zero-hop advertisement"),
+    ("advert interval <hours>",          "send a flood advert every N hours (0 disables)"),
     ("status",                           "bot health and runtime stats"),
     ("reload",                           "rescan commands/ and reload plugins"),
     ("restart",                          "full teardown + reinit (re-reads config)"),
@@ -724,10 +725,30 @@ _RADIO_OPS = {
 async def _cmd_advert(ctx, rest):
     parts = rest.split()
     if not parts:
-        return "Usage: !adm advert <flood|zero>"
+        return "Usage: !adm advert <flood|zero|interval <hours>>"
     mode = parts[0].lower()
+    if mode == "interval":
+        if len(parts) < 2:
+            cur = ctx.bot.advert_interval_hours
+            return (
+                f"Flood advert interval: {cur}h"
+                f"{' (disabled)' if cur == 0 else ''}. "
+                "Set with: !adm advert interval <hours> (0 disables)"
+            )
+        try:
+            hours = int(parts[1])
+        except ValueError:
+            return f"Invalid interval: {parts[1]!r}. Use a whole number of hours."
+        try:
+            res = await ctx.bot.mgmt.radio_set_advert_interval(hours, **_actor(ctx))
+        except MgmtError as e:
+            return e.message
+        n = res["interval_hours"]
+        if n == 0:
+            return "Periodic flood advert disabled"
+        return f"Flood advert every {n}h"
     if mode not in ("flood", "zero"):
-        return f"Unknown advert mode: {mode!r}. Use 'flood' or 'zero'."
+        return f"Unknown advert mode: {mode!r}. Use 'flood', 'zero', or 'interval'."
     flood = mode == "flood"
     try:
         await ctx.bot.mgmt.send_advert(flood, **_actor(ctx))

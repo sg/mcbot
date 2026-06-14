@@ -498,3 +498,27 @@ async def radio_contacts_policy(
         )
     except MgmtError as e:
         raise http_for_mgmt(e)
+
+
+@router.get("/radio/advert-interval")
+async def radio_advert_interval(
+    bot=Depends(get_bot), identity: str = Depends(require_auth),
+):
+    return await bot.mgmt.radio_advert_interval(**actor_kwargs(identity))
+
+
+class AdvertIntervalBody(BaseModel):
+    interval_hours: int = 0
+
+
+@router.post("/radio/advert-interval")
+async def radio_set_advert_interval(
+    body: AdvertIntervalBody,
+    bot=Depends(get_bot), identity: str = Depends(require_auth),
+):
+    try:
+        return await bot.mgmt.radio_set_advert_interval(
+            body.interval_hours, **actor_kwargs(identity),
+        )
+    except MgmtError as e:
+        raise http_for_mgmt(e)
