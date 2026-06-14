@@ -2,6 +2,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { api } from '../api.js'
 import { fmtDateTime } from '../time.js'
+import InfoTip from '../components/InfoTip.vue'
 
 const tabs = [
   { key: 'stats', label: 'Overview' },
@@ -692,9 +693,7 @@ onMounted(() => loadTab('stats'))
             <button :disabled="advertSending" @click="sendAdvert">
               {{ advertSending ? 'Sending…' : 'Advert' }}
             </button>
-            <span class="muted">
-              Zero-hop reaches direct neighbors only; flood propagates through the mesh.
-            </span>
+            <InfoTip text="Zero-hop reaches direct neighbors only; flood propagates through the mesh." />
           </div>
 
           <div class="toolbar">
@@ -708,10 +707,7 @@ onMounted(() => loadTab('stats'))
               />
             </label>
             <button @click="applyAdvertInterval">Apply</button>
-            <span class="muted">
-              0 = disabled. Bot sends a flood advert every N hours; persists in the
-              database (mcbot.conf only seeds the first-run default).
-            </span>
+            <InfoTip text="0 = disabled. Bot sends a flood advert every N hours; persists in the database (mcbot.conf only seeds the first-run default)." />
           </div>
 
           <!-- Contact-table rollover -->
@@ -721,7 +717,7 @@ onMounted(() => loadTab('stats'))
               <button :disabled="statusLoading" @click="loadContactStatus">
                 {{ statusLoading ? 'Checking…' : 'Check contact table' }}
               </button>
-              <span class="muted">Reads the radio's contact list (takes a few seconds).</span>
+              <InfoTip text="Reads the radio's contact list (takes a few seconds)." />
             </div>
             <div v-if="contactStatus" class="decoded">
               <div class="kv">
@@ -748,13 +744,8 @@ onMounted(() => loadTab('stats'))
                 <button :disabled="evictBusy" @click="evictNow">
                   {{ evictBusy ? 'Evicting…' : 'Evict to headroom now' }}
                 </button>
+                <InfoTip text="Evicts the stalest contacts from the radio (bot users, owners, and recent DM peers are protected; the bot's database keeps the full archive). Policy changes here are runtime only — set radio_evict_* in mcbot.conf to persist across restarts." />
               </div>
-              <p class="muted" style="margin: 4px 12px 8px">
-                Evicts the stalest contacts from the radio (bot users, owners, and
-                recent DM peers are protected; the bot's database keeps the full
-                archive). Policy changes here are runtime only — set radio_evict_*
-                in mcbot.conf to persist across restarts.
-              </p>
             </div>
           </div>
 
