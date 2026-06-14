@@ -115,6 +115,13 @@ owner_pubkeys = 0000000000000000000000000000000000000000000000000000000000000000
 ;radio_evict_max_per_run = 50
 ;radio_evict_min_interval = 120
 
+; Periodic flood advert: send a flood advertisement every N hours (0 =
+; disabled). This is only the FIRST-RUN SEED — on first start it is copied
+; into the database, after which the DB value is authoritative and managed at
+; runtime via '!adm advert interval N' or the web Manage->Radio page (changes
+; persist across restarts). Edit this only to change the initial default.
+;advert_interval_hours = 0
+
 ; Environment variables for the bot and command scripts.
 ; Each key here is exported into the process environment at startup, so
 ; command scripts can read it via os.environ (e.g. commands/pws.py reads

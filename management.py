@@ -598,6 +598,32 @@ class Management:
         )
         return {"flood": flood, "ok": ok}
 
+    async def radio_advert_interval(
+        self, *, actor_pubkey=None, actor_name=None,
+    ) -> dict:
+        """Current periodic flood-advert interval (hours; 0 = disabled).
+        Read-only, not audited."""
+        return {"interval_hours": self.bot.advert_interval_hours}
+
+    async def radio_set_advert_interval(
+        self, interval_hours,
+        *, actor_pubkey=None, actor_name=None,
+    ) -> dict:
+        """Set the periodic flood-advert interval in hours (0 = disabled).
+        Persists to the database. Audited as 'radio.advert_interval'."""
+        try:
+            interval_hours = int(interval_hours)
+        except (TypeError, ValueError):
+            raise MgmtError("interval must be a whole number of hours", "invalid")
+        if not (0 <= interval_hours <= 168):
+            raise MgmtError("interval must be between 0 and 168 hours", "invalid")
+        await self.bot.set_advert_interval(interval_hours)
+        await self._audit(
+            actor_pubkey, actor_name, "radio.advert_interval", None,
+            f"interval={interval_hours}h",
+        )
+        return {"interval_hours": self.bot.advert_interval_hours}
+
     # ==================================================================
     # Radio contact-table rollover
     # ==================================================================
