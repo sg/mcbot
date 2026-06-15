@@ -20,9 +20,9 @@
 #
 
 import asyncio
+import base64
 import json
 import math
-import urllib.parse
 
 import requests
 
@@ -103,12 +103,12 @@ def _geojson_io_url(located_named):
         })
     fc = {"type": "FeatureCollection", "features": features}
     data = json.dumps(fc, separators=(",", ":"))
-    # geojson.io expects encodeURIComponent(JSON.stringify(...)). quote()'s
-    # default safe="/" leaves slashes raw, so a hop name containing '/' puts a
-    # bare '/' in the JSON payload and geojson.io mis-parses it ("unterminated
-    # string"). safe="" matches encodeURIComponent and encodes the '/'.
-    enc = urllib.parse.quote(data, safe="")
-    return "https://geojson.io/#data=data:application/json," + enc
+    # Use a base64 data URI. geojson.io's rewritten loader mis-parses the
+    # percent-encoded inline form for non-trivial payloads ("unterminated
+    # string"); base64 is reliable, ~20% shorter, and sidesteps all special-
+    # character/encoding issues. base64 chars (+/=) are valid in a URL fragment.
+    b64 = base64.b64encode(data.encode("utf-8")).decode("ascii")
+    return "https://geojson.io/#data=data:application/json;base64," + b64
 
 
 def _shorten_sync(long_url):
