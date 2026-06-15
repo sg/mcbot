@@ -103,7 +103,12 @@ def _geojson_io_url(located_named):
         })
     fc = {"type": "FeatureCollection", "features": features}
     data = json.dumps(fc, separators=(",", ":"))
-    return "https://geojson.io/#data=data:application/json," + urllib.parse.quote(data)
+    # geojson.io expects encodeURIComponent(JSON.stringify(...)). quote()'s
+    # default safe="/" leaves slashes raw, so a hop name containing '/' puts a
+    # bare '/' in the JSON payload and geojson.io mis-parses it ("unterminated
+    # string"). safe="" matches encodeURIComponent and encodes the '/'.
+    enc = urllib.parse.quote(data, safe="")
+    return "https://geojson.io/#data=data:application/json," + enc
 
 
 def _shorten_sync(long_url):
