@@ -89,9 +89,15 @@ def _fetch_sync(location: str, country_code: str | None) -> str:
         "latitude": lat,
         "longitude": lon,
         "current": (
-            "temperature_2m,relative_humidity_2m,precipitation,"
+            "temperature_2m,relative_humidity_2m,"
             "wind_speed_10m,wind_direction_10m"
         ),
+        # daily precipitation_sum[0] is today's accumulated rain. current.
+        # precipitation is only the preceding hour, so it reads 0 once the
+        # rain stops even after inches fell. timezone=auto makes "today" the
+        # local day at the location.
+        "daily": "precipitation_sum",
+        "timezone": "auto",
         "wind_speed_unit": "mph",
         "temperature_unit": "fahrenheit",
         "precipitation_unit": "inch",
@@ -108,15 +114,19 @@ def _fetch_sync(location: str, country_code: str | None) -> str:
     try:
         temp = cur["temperature_2m"]
         humid = cur["relative_humidity_2m"]
-        precip = cur["precipitation"]
         wind = cur["wind_speed_10m"]
         wdir = int(cur.get("wind_direction_10m", 0))
     except KeyError as e:
         return f"Error (forecast): missing field {e}"
 
+    # today's total rainfall (local day); modeled, so it can undercount heavy
+    # local downpours vs a physical gauge.
+    psum = (fc.get("daily") or {}).get("precipitation_sum") or []
+    rain = f"{psum[0]}in" if psum and psum[0] is not None else "n/a"
+
     return (
         f"{location} [{cc}] ({lat},{lon}): "
-        f"{temp}F, Humid: {humid}%, Rain: {precip}in, "
+        f"{temp}F, Humid: {humid}%, Rain: {rain}, "
         f"Wind: {_cardinal(wdir)} {wind}mph"
     )
 
