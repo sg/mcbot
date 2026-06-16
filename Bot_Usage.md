@@ -236,7 +236,11 @@ admin subcommand reference).
 ## 3. Configuration Reference
 
 `mcbot.conf` uses INI syntax (`configparser`). CLI flags override conf
-values where applicable.
+values where applicable. Unrecognized sections/keys (typos, or settings
+removed in an upgrade) are ignored, but each is logged loudly as a
+`WARNING` at startup (e.g. `mcbot.conf: [bot] unrecognized key 'foo'
+(ignored)`). The `[env]` and `[channels]` sections accept arbitrary keys
+and are not checked.
 
 ### `[radio]`
 
