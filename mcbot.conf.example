@@ -63,13 +63,6 @@ log_level = INFO
 commands_dir = ./commands
 ; Set to false to disable command dispatch (sync/log only).
 enabled = true
-; Client-side decrypt + ingest of DMs/channel messages from the RX_LOG_DATA
-; RF firehose. On firmware that queues messages (v1.15) this duplicates the
-; radio's get_msg path and is deduped, so it can be set false to run
-; capture-only. The raw packet monitor is unaffected either way. Leave true
-; to also cover non-queueing firmware and channels not programmed into the
-; radio (e.g. beyond its slot capacity). Default: true.
-;rx_log_decrypt = true
 ; Track repeaters rebroadcasting the bot's OWN sent messages. When a DM or
 ; channel message the bot sent is heard being repeated on RF, each repeat is
 ; logged and shown on the web Packets screen (packet_type REPEAT). If no
@@ -78,8 +71,7 @@ enabled = true
 ; its path and is labelled DIRECT_0HOP (delivered direct, nothing to repeat —
 ; expected, not a failure). NO_REPEAT thus means "sent where a repeater could
 ; have rebroadcast (flood/multi-hop), but none was HEARD in the window," not
-; that delivery failed. Detection runs on the always-on packet firehose, so it
-; works even with rx_log_decrypt=false. Default: true / 5 seconds.
+; that delivery failed. Default: true / 5 seconds.
 ;repeat_tracking = true
 ;repeat_timeout = 5
 ; Path to the exported radio private key (0600). Default: <db>.privkey
