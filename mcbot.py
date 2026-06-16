@@ -387,6 +387,9 @@ class Config:
     # path of the config file actually loaded (None if none was found);
     # recorded so the startup banner can show where settings came from.
     config_path: Optional[str] = None
+    # human-readable warnings about the config file (e.g. unrecognized keys),
+    # collected during load and logged loudly at startup.
+    config_warnings: list = field(default_factory=list)
     commands_dir: Path = Path("./commands")
     privkey_path: Optional[Path] = None  # default: <db>.privkey
     log_channels: str = "all"
@@ -448,6 +451,58 @@ class Config:
         if self.transport == "serial":
             return f"serial {self.serial_port} @{self.serial_baud}"
         return f"tcp {self.host}:{self.port}"
+
+
+# Recognized option keys per config section (lowercase — configparser folds
+# option names to lowercase). Used to warn about typos / stale settings at
+# startup. Keep in sync with the keys load_config actually reads below.
+_KNOWN_CONFIG_KEYS = {
+    "radio": {"transport", "host", "port", "serial_port", "serial_baud",
+              "device_pin"},
+    "storage": {"db", "max_channel_messages", "max_dms", "max_contacts",
+                "max_packets"},
+    "channel_logging": {"channels"},
+    "logging": {"logs_dir", "log_level"},
+    "bot": {"commands_dir", "enabled", "repeat_tracking", "repeat_timeout",
+            "privkey_path", "dm_max_attempts", "dm_flood_after",
+            "dm_max_flood_attempts", "radio_evict_enabled",
+            "radio_evict_headroom", "radio_evict_max_per_run",
+            "radio_evict_min_interval", "radio_evict_protect_types",
+            "advert_interval_hours", "owner_pubkeys"},
+    "web": {"enabled", "host", "port", "admin_user", "admin_password_hash",
+            "session_secret", "cors_origins", "api_tokens", "tls_cert",
+            "tls_key"},
+}
+# Sections whose keys are user data (env-var names, channel indexes), not a
+# fixed set of option names — accept any key there.
+_DYNAMIC_CONFIG_SECTIONS = {"env", "channels"}
+# Options that were removed; flagged as deprecated (ignored) rather than
+# "unrecognized" so upgraders get a clear, friendly nudge.
+_DEPRECATED_CONFIG_KEYS = {"bot": {"rx_log_decrypt"}}
+
+
+def _check_unknown_config_keys(parser) -> list:
+    """Return warnings for unrecognized sections/keys in the parsed config."""
+    warnings = []
+    for section in parser.sections():
+        if section in _DYNAMIC_CONFIG_SECTIONS:
+            continue
+        if section not in _KNOWN_CONFIG_KEYS:
+            warnings.append(f"unrecognized section [{section}] (ignored)")
+            continue
+        allowed = _KNOWN_CONFIG_KEYS[section]
+        deprecated = _DEPRECATED_CONFIG_KEYS.get(section, frozenset())
+        for key in parser[section]:
+            if key in allowed:
+                continue
+            if key in deprecated:
+                warnings.append(
+                    f"[{section}] '{key}' is deprecated and ignored "
+                    "(safe to remove)"
+                )
+            else:
+                warnings.append(f"[{section}] unrecognized key '{key}' (ignored)")
+    return warnings
 
 
 def load_config(args) -> Config:
@@ -624,6 +679,10 @@ def load_config(args) -> Config:
                     )
                     sys.exit(2)
                 cfg.channels[idx] = (name, secret)
+
+        # flag unrecognized sections/keys (typos, stale settings); logged
+        # loudly at startup once the logger is configured.
+        cfg.config_warnings = _check_unknown_config_keys(parser)
 
     # CLI overrides
     if args.transport:
@@ -3607,6 +3666,11 @@ class MCBot:
             self.cfg.log_channels, self.cfg.commands_enabled,
         )
         self.logger.info("=" * 60)
+
+        # surface config typos / stale settings loudly so they're not silently
+        # ignored (mcbot.conf is not strictly validated).
+        for w in self.cfg.config_warnings:
+            self.logger.warning("mcbot.conf: %s", w)
 
         # MeshCore.__init__ forces the "meshcore" logger level from its `debug`
         # arg (debug -> DEBUG, else INFO), overriding setup_logging. Drive that
