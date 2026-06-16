@@ -1,11 +1,12 @@
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { api, wsUrl } from '../api.js'
 import { fmtTime } from '../time.js'
 import HexDump from '../components/HexDump.vue'
 import FieldBreakout from '../components/FieldBreakout.vue'
 
 const packets = ref([])
+const listEl = ref(null) // scroll container for the packet list
 // Type-filter model: `excluded` holds the packet types the user has turned
 // off. Empty set = "All" (everything shown). `knownTypes` accumulates the
 // set of types we've seen so checkboxes don't flicker as old packets roll
@@ -60,11 +61,54 @@ const activeRange = computed(() => {
 async function load() {
   try {
     const r = await api('/packets?limit=200')
-    packets.value = r.items
+    // API returns newest-first; show oldest at top, newest at the bottom
+    packets.value = r.items.slice().reverse()
     rememberTypes(r.items)
+    await nextTick()
+    scrollToBottom()
   } catch (e) {
     error.value = e.message
   }
+}
+
+function atBottom() {
+  const el = listEl.value
+  if (!el) return true
+  return el.scrollHeight - el.scrollTop - el.clientHeight < 40
+}
+function scrollToBottom() {
+  const el = listEl.value
+  if (el) el.scrollTop = el.scrollHeight
+}
+function scrollRowIntoView(id) {
+  listEl.value
+    ?.querySelector(`[data-pid="${id}"]`)
+    ?.scrollIntoView({ block: 'nearest' })
+}
+
+// keyboard: Up = previous (older, above) row, Down = next (newer, below) row
+function selectByOffset(delta) {
+  const list = filtered.value
+  if (!list.length) return
+  let i = selected.value ? list.findIndex((p) => p.id === selected.value.id) : -1
+  if (i === -1) i = list.length - 1 // nothing selected -> start at newest (bottom)
+  else i = Math.max(0, Math.min(list.length - 1, i + delta))
+  const p = list[i]
+  select(p)
+  nextTick(() => scrollRowIntoView(p.id))
+}
+function onKey(e) {
+  if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return
+  const t = e.target
+  if (
+    t &&
+    (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' ||
+      t.tagName === 'SELECT' || t.isContentEditable)
+  )
+    return
+  if (e.metaKey || e.ctrlKey || e.altKey) return
+  e.preventDefault()
+  selectByOffset(e.key === 'ArrowUp' ? -1 : 1)
 }
 
 async function select(p) {
@@ -100,12 +144,18 @@ onMounted(() => {
   ws = new WebSocket(wsUrl('/ws/packets'))
   ws.onmessage = (ev) => {
     const p = JSON.parse(ev.data)
-    packets.value.unshift(p)
-    if (packets.value.length > 500) packets.value.pop()
+    const stick = atBottom() // only auto-tail if the user is already at the bottom
+    packets.value.push(p) // newest at the bottom
+    if (packets.value.length > 500) packets.value.shift() // drop oldest (top)
     rememberTypes([p])
+    if (stick) nextTick(scrollToBottom)
   }
+  window.addEventListener('keydown', onKey)
 })
-onUnmounted(() => ws && ws.close())
+onUnmounted(() => {
+  if (ws) ws.close()
+  window.removeEventListener('keydown', onKey)
+})
 </script>
 
 <template>
@@ -132,7 +182,7 @@ onUnmounted(() => ws && ws.close())
         <span class="muted">{{ filtered.length }} shown</span>
         <span v-if="error" class="err">{{ error }}</span>
       </div>
-      <div class="body">
+      <div class="body" ref="listEl">
         <table>
           <thead>
             <tr><th>time</th><th>type</th><th>from</th><th>ch</th><th>text</th><th>raw</th></tr>
@@ -141,6 +191,7 @@ onUnmounted(() => ws && ws.close())
             <tr
               v-for="p in filtered"
               :key="p.id"
+              :data-pid="p.id"
               class="clickable"
               :class="{ selected: selected && selected.id === p.id }"
               @click="select(p)"
