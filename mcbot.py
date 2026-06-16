@@ -3664,11 +3664,14 @@ class MCBot:
 
         self.logger.info("connected to %s", self.cfg.target_desc())
 
-        # enable client-side channel decryption so messages from RX_LOG packets
-        # can have their text decoded once channels are populated in the parser.
+        # client-side channel decryption of RX_LOG packets, gated by
+        # [bot] rx_log_decrypt. When false this stays off so RX_LOG channel
+        # text is NOT decoded (capture-only) — matching the config's intent;
+        # leaving it on would decrypt RX_LOG channel messages for the firehose
+        # even with rx_log_decrypt=false.
         try:
             if hasattr(self.mc, "set_decrypt_channel_logs"):
-                self.mc.set_decrypt_channel_logs(True)
+                self.mc.set_decrypt_channel_logs(self.cfg.rx_log_decrypt)
         except Exception:
             self.logger.exception("set_decrypt_channel_logs failed")
 
