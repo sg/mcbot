@@ -78,14 +78,12 @@ keys are operator-managed via `mcbot.conf [channels]` (first-run seed) and
 `!adm channel add/remove` (runtime), and pushed into the radio from there.
 
 So the client-side `RX_LOG_DATA` decrypt path is **redundant** for message
-capture on message-queueing firmware (and is deduped away). It is kept
-because it is the only source of raw on-air bytes for the packet monitor,
-it observes traffic the radio doesn't decrypt for us, and it still decodes
-messages on firmware that doesn't queue (older versions, or non-companion
-roles like repeater/room-server) and on channels not programmed into the
-radio (e.g. beyond its slot capacity). The decrypt+ingest half can be
-turned off with `[bot] rx_log_decrypt = false` to run capture-only; the
-raw packet monitor keeps working regardless.
+capture on message-queueing firmware (and is deduped away). It is always on
+because it is the only source of raw on-air bytes for the packet monitor and
+routing paths, it observes traffic the radio doesn't decrypt for us, and it
+still decodes messages on firmware that doesn't queue (older versions, or
+non-companion roles like repeater/room-server) and on channels not programmed
+into the radio (e.g. beyond its slot capacity).
 
 ### Client-side decryption
 
@@ -307,7 +305,6 @@ CLI: `--logs-dir`, `--log-level`, `--debug` (sets meshcore lib to DEBUG)
 |-----|---------|-------------|
 | `commands_dir` | `./commands` | Plugin directory |
 | `enabled` | `true` | If false, dispatch is suspended (sync/log only) |
-| `rx_log_decrypt` | `true` | Client-side decrypt + ingest of DMs/channel msgs from `RX_LOG_DATA`. On message-queueing firmware (v1.15) this duplicates the radio's `get_msg` path and is deduped; set false to run capture-only. The raw packet monitor is unaffected. Leave on for non-queueing firmware or channels not programmed into the radio. |
 | `privkey_path` | `<db>.privkey` | Where to cache the radio's private key |
 | `owner_pubkeys` | (none) | Comma list of 64-hex pubkeys bootstrapped into the `owner` group at startup |
 | `dm_max_attempts` | 3 | `send_msg_with_retry` max attempts |

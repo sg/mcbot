@@ -396,18 +396,10 @@ class Config:
     max_contacts: int = 500
     auto_reconnect: bool = True
     commands_enabled: bool = True
-    # Client-side decrypt + ingest of DMs/channel msgs from RX_LOG_DATA.
-    # On firmware that queues messages this duplicates the get_msg path
-    # (and is deduped), so it can be turned off to run capture-only — the
-    # raw packet monitor (firehose) is unaffected either way. Leave on to
-    # also cover non-queueing firmware and channels not programmed into the
-    # radio (e.g. beyond its slot capacity).
-    rx_log_decrypt: bool = True
     # Track whether repeaters rebroadcast the bot's own sent messages. When a
     # sent DM/channel message is heard being repeated on RF (RX_LOG_DATA), log
     # each repeater and surface it on the web Packets screen; if none is heard
-    # within repeat_timeout seconds, log + surface that. Works regardless of
-    # rx_log_decrypt (it runs on the always-on firehose).
+    # within repeat_timeout seconds, log + surface that.
     repeat_tracking: bool = True
     repeat_timeout: float = 5.0
     debug: bool = False
@@ -509,9 +501,6 @@ def load_config(args) -> Config:
             )
             cfg.commands_enabled = parser["bot"].getboolean(
                 "enabled", cfg.commands_enabled
-            )
-            cfg.rx_log_decrypt = parser["bot"].getboolean(
-                "rx_log_decrypt", cfg.rx_log_decrypt
             )
             cfg.repeat_tracking = parser["bot"].getboolean(
                 "repeat_tracking", cfg.repeat_tracking
@@ -2222,18 +2211,16 @@ class MCBot:
         self._contacts_dirty = True
 
     async def _on_rx_log_data(self, event) -> None:
-        # RX_LOG_DATA contains every observed RF frame as raw bytes. if rx_log_decrypt
-        # is set to true in the config, DMs using radio's exported private key and
-        # channel messages using configured channel secrets are decrypted here.
-        # on firmware that queues messages (v1.15), this duplicates the get_msg path.
-        # since the radio also decrypts and delivers DMs (CONTACT_MSG_RECV) and channel
-        # msgs on its programmed channels (CHANNEL_MSG_RECV), the ingest funnel dedups
-        # the two. grabbing the RX_LOG_DATA is useful even if we aren't relying on it
-        # to decrypt messages since it's the only source of raw on-air bytes for
-        # the packet monitor. it sees traffic the radio doesn't decrypt for us, and
-        # it covers channels beyond the radio's slot capacity / non-queueing firmware.
-        # (the  decrypt+ingest is configured via [bot] rx_log_decrypt; the raw-byte
-        # capture in _firehose runs regardless.)
+        # RX_LOG_DATA contains every observed RF frame as raw bytes. DMs (using
+        # the radio's exported private key) and channel messages (using
+        # configured channel secrets) are decrypted here. On message-queueing
+        # firmware (v1.15) this duplicates the radio's get_msg path — the radio
+        # also decrypts and delivers DMs (CONTACT_MSG_RECV) and channel msgs on
+        # its programmed channels (CHANNEL_MSG_RECV) — so the ingest funnel
+        # dedups the two. RX_LOG is still essential: it is the only source of
+        # raw on-air bytes (packet monitor) and routing paths, it sees traffic
+        # the radio doesn't decrypt for us, and it covers channels beyond the
+        # radio's slot capacity / non-queueing firmware.
         payload = event.payload
         if not isinstance(payload, dict):
             return
@@ -3616,9 +3603,8 @@ class MCBot:
             self.cfg.max_packets,
         )
         self.logger.info(
-            "log_channels=%s commands_enabled=%s rx_log_decrypt=%s",
+            "log_channels=%s commands_enabled=%s",
             self.cfg.log_channels, self.cfg.commands_enabled,
-            self.cfg.rx_log_decrypt,
         )
         self.logger.info("=" * 60)
 
@@ -3664,14 +3650,13 @@ class MCBot:
 
         self.logger.info("connected to %s", self.cfg.target_desc())
 
-        # client-side channel decryption of RX_LOG packets, gated by
-        # [bot] rx_log_decrypt. When false this stays off so RX_LOG channel
-        # text is NOT decoded (capture-only) — matching the config's intent;
-        # leaving it on would decrypt RX_LOG channel messages for the firehose
-        # even with rx_log_decrypt=false.
+        # enable the library's RX_LOG channel-log decryption. This decodes
+        # channel text from RX_LOG frames and, via the library's correlation,
+        # back-fills the routing path onto the radio's queued channel messages
+        # (so !path works for channel commands).
         try:
             if hasattr(self.mc, "set_decrypt_channel_logs"):
-                self.mc.set_decrypt_channel_logs(self.cfg.rx_log_decrypt)
+                self.mc.set_decrypt_channel_logs(True)
         except Exception:
             self.logger.exception("set_decrypt_channel_logs failed")
 
@@ -3737,11 +3722,11 @@ class MCBot:
                         EventType.ADVERTISEMENT, self._on_advertisement
                     )
                 )
-            # the firehose (subscribed to all events above) records raw_hex
-            # for the packet monitor regardless, this extra subscription only
-            # adds the client-side decrypt+ingest of DMs/channel msgs, gated
-            # by [bot] rx_log_decrypt.
-            if self.cfg.rx_log_decrypt and hasattr(EventType, "RX_LOG_DATA"):
+            # the firehose (subscribed to all events above) records raw_hex for
+            # the packet monitor; this subscription adds the client-side
+            # decrypt+ingest of DMs/channel msgs from RX_LOG (deduped against
+            # the radio's queued get_msg delivery).
+            if hasattr(EventType, "RX_LOG_DATA"):
                 self._subs.append(
                     self.mc.subscribe(
                         EventType.RX_LOG_DATA, self._on_rx_log_data
