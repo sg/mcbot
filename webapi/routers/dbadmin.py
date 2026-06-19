@@ -522,3 +522,27 @@ async def radio_set_advert_interval(
         )
     except MgmtError as e:
         raise http_for_mgmt(e)
+
+
+@router.get("/command-delay")
+async def command_delay(
+    bot=Depends(get_bot), identity: str = Depends(require_auth),
+):
+    return await bot.mgmt.command_delay(**actor_kwargs(identity))
+
+
+class CommandDelayBody(BaseModel):
+    delay: float = 0.0
+
+
+@router.post("/command-delay")
+async def set_command_delay(
+    body: CommandDelayBody,
+    bot=Depends(get_bot), identity: str = Depends(require_auth),
+):
+    try:
+        return await bot.mgmt.set_command_delay(
+            body.delay, **actor_kwargs(identity),
+        )
+    except MgmtError as e:
+        raise http_for_mgmt(e)

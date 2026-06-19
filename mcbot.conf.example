@@ -114,6 +114,14 @@ owner_pubkeys = 0000000000000000000000000000000000000000000000000000000000000000
 ; persist across restarts). Edit this only to change the initial default.
 ;advert_interval_hours = 0
 
+; Delay (seconds) inserted right before TRANSMITTING each command response —
+; after the handler has built its reply (data lookups / web queries are NOT
+; delayed). 0 = disabled; otherwise 0.1–2.0. Useful for testing whether nearby
+; repeaters miss the bot's sends when it replies too quickly. FIRST-RUN SEED
+; only: copied into the database on first start, then runtime-managed via '!adm
+; command delay N' or the web Manage->Commands page (persists across restarts).
+;command_delay = 0
+
 ; Environment variables for the bot and command scripts.
 ; Each key here is exported into the process environment at startup, so
 ; command scripts can read it via os.environ (e.g. commands/pws.py reads
