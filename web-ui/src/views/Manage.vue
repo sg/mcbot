@@ -65,6 +65,8 @@ async function loadTab(key, force = false) {
     if (key === 'contacts') rememberContactTypes(data.value[key])
     // Radio tab shows the current periodic flood-advert interval.
     if (key === 'radio') await loadAdvertInterval()
+    // Commands tab shows the current pre-send command-response delay.
+    if (key === 'command-config') await loadCommandDelay()
     // users/groups tabs (and the Users "create bot user" form) need the
     // list of group names for their group pickers.
     if (
@@ -255,6 +257,25 @@ async function applyAdvertInterval() {
     n > 0 ? `Flood advert every ${n}h` : 'Periodic flood advert disabled',
   )
   await loadAdvertInterval()
+}
+
+// ---- command response delay (seconds; 0 = disabled) ----
+const commandDelay = ref(0)
+async function loadCommandDelay() {
+  try {
+    const r = await api('/command-delay')
+    commandDelay.value = r.delay
+  } catch (e) {
+    error.value = e.message
+  }
+}
+async function applyCommandDelay() {
+  const n = Number(commandDelay.value)
+  await run(
+    api('/command-delay', { method: 'POST', json: { delay: n } }),
+    n > 0 ? `Command response delay ${n.toFixed(1)}s` : 'Command response delay disabled',
+  )
+  await loadCommandDelay()
 }
 
 // ---- radio contact-table rollover ----
@@ -912,6 +933,21 @@ onMounted(() => loadTab('stats'))
 
         <!-- Command config (editable) -->
         <div v-else-if="active === 'command-config'">
+          <div class="toolbar">
+            <label class="chk">
+              Response delay (seconds)
+              <input
+                type="number"
+                min="0"
+                max="2"
+                step="0.1"
+                v-model.number="commandDelay"
+                style="width: 5em"
+              />
+            </label>
+            <button @click="applyCommandDelay">Apply</button>
+            <InfoTip text="0 = disabled, otherwise 0.1–2.0s. Held right before each reply is transmitted (after lookups/queries), to test whether nearby repeaters miss replies sent too quickly. Persists in the database (mcbot.conf only seeds the first-run default)." />
+          </div>
           <table>
             <thead>
               <tr>

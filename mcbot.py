@@ -434,6 +434,12 @@ class Config:
     # authoritative and runtime-managed (via '!adm advert interval N' and the
     # web Manage->Radio page). Edit this only to change the first-run default.
     advert_interval_hours: int = 0
+    # Delay (seconds) applied right before transmitting each command response,
+    # after its text is built — lookups/web queries are NOT delayed. 0 =
+    # disabled; otherwise clamped to 0.1–2.0. SEED only: first run writes it to
+    # bot_meta, then the DB value is authoritative and runtime-managed (via
+    # '!adm command delay N' and the web Manage->Commands page).
+    command_delay: float = 0.0
     # --- web admin UI / API ([web] section) ---
     web_enabled: bool = False
     web_host: str = "127.0.0.1" # 0.0.0.0 to expose on all interfaces
@@ -468,7 +474,7 @@ _KNOWN_CONFIG_KEYS = {
             "dm_max_flood_attempts", "radio_evict_enabled",
             "radio_evict_headroom", "radio_evict_max_per_run",
             "radio_evict_min_interval", "radio_evict_protect_types",
-            "advert_interval_hours", "owner_pubkeys"},
+            "advert_interval_hours", "command_delay", "owner_pubkeys"},
     "web": {"enabled", "host", "port", "admin_user", "admin_password_hash",
             "session_secret", "cors_origins", "api_tokens", "tls_cert",
             "tls_key"},
@@ -590,6 +596,9 @@ def load_config(args) -> Config:
             cfg.advert_interval_hours = parser["bot"].getint(
                 "advert_interval_hours", cfg.advert_interval_hours
             )
+            cfg.command_delay = min(2.0, max(0.0, parser["bot"].getfloat(
+                "command_delay", cfg.command_delay
+            )))
             protect_raw = parser["bot"].get("radio_evict_protect_types", "")
             if protect_raw.strip():
                 cfg.radio_evict_protect_types = parse_contact_types(
@@ -1306,6 +1315,10 @@ class MCBot:
         # periodic) refreshes it.
         self.advert_interval_hours: int = cfg.advert_interval_hours
         self._last_flood_advert: float = 0.0
+        # delay before transmitting command responses (seconds). seeded from
+        # cfg, then DB-authoritative (loaded via _load_command_delay at startup,
+        # persisted by set_command_delay).
+        self.command_delay: float = cfg.command_delay
 
     # channel logging filter
     def _parse_log_channels(self) -> None:
@@ -2997,6 +3010,12 @@ class MCBot:
             replies = self.paginate(replies, max_chars=120)
         else:
             replies = self.paginate(replies, max_chars=100)
+        # Optional fixed delay before transmitting — placed here, AFTER the
+        # handler did all its lookups/web queries, so only the radio TX is held
+        # back. A knob for testing whether nearby repeaters miss our sends when
+        # we reply too quickly.
+        if self.command_delay > 0:
+            await asyncio.sleep(self.command_delay)
         for r in replies:
             await self.send_reply(ctx, r)
 
@@ -3578,6 +3597,36 @@ class MCBot:
             " (disabled)" if self.advert_interval_hours == 0 else "",
         )
 
+    # --- command response delay (seeded from config, then DB-managed) ---
+    async def _load_command_delay(self) -> None:
+        # DB is authoritative; seed it from config on first run (key absent).
+        row = await self.db.fetchone(
+            "SELECT value FROM bot_meta WHERE key='command_delay'"
+        )
+        val = row["value"] if row else None
+        try:
+            self.command_delay = min(2.0, max(0.0, float(val)))
+        except (TypeError, ValueError):
+            self.command_delay = self.cfg.command_delay
+            await self.db.execute(
+                "INSERT INTO bot_meta(key,value) VALUES('command_delay',?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (str(self.command_delay),),
+            )
+
+    async def set_command_delay(self, seconds: float) -> None:
+        self.command_delay = min(2.0, max(0.0, float(seconds)))
+        await self.db.execute(
+            "INSERT INTO bot_meta(key,value) VALUES('command_delay',?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (str(self.command_delay),),
+        )
+        self.logger.info(
+            "command response delay set to %.1fs%s",
+            self.command_delay,
+            " (disabled)" if self.command_delay == 0 else "",
+        )
+
     async def send_channel_text(self, channel_idx: int, text: str):
         # single-shot channel send (channel messages have no ACK). returns
         # the radio Event (or None); logs a rejection. no exception on error.
@@ -3751,6 +3800,7 @@ class MCBot:
         await self._bootstrap_admin_state()
         await self.seed_command_configs()
         await self._load_advert_interval()
+        await self._load_command_delay()
 
         # ensure radio contact-table headroom on startup (device_info +
         # contacts have been synced above; owners are bootstrapped into

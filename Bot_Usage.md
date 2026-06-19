@@ -1022,7 +1022,18 @@ name, first 6 hex chars of pubkey, and ISO-format `last_advert` time.
 !adm command channel remove <cmd> <channel>  remove a channel; removing the
                                            last one clears the allowlist so
                                            the command responds on any channel
+!adm command delay <seconds>               delay before transmitting any
+                                           command reply (0 disables, else
+                                           0.1–2.0); persists in the database
 ```
+
+`!adm command delay` inserts a fixed pause right before each command response
+is transmitted — *after* the handler has finished its lookups/web queries, so
+only the radio TX is held back. It exists to test whether nearby repeaters miss
+the bot's sends when it replies too quickly. The value is seeded from
+`[bot] command_delay` in `mcbot.conf` on first run, then DB-authoritative and
+also settable on the web **Manage → Commands** page (changes persist across
+restarts).
 
 `!adm command channel add/remove` edits `command_config.allowed_channels`
 (a JSON array). Because the dispatcher reads that column fresh on every

@@ -60,6 +60,7 @@ _HELP = [
     ("command list",                     "list loaded commands + their config"),
     ("command channel add <cmd> <ch>",   "add a channel the command responds on"),
     ("command channel remove <cmd> <ch>", "stop a command responding on a channel"),
+    ("command delay <seconds>",          "delay before sending replies (0 off, 0.1–2.0)"),
     ("radio pathhash [1|2|3]",           "show/set this radio's outgoing path-hash width"),
     ("advert <flood|zero>",              "send a flood or zero-hop advertisement"),
     ("advert interval <hours>",          "send a flood advert every N hours (0 disables)"),
@@ -575,7 +576,7 @@ async def _cmd_command(ctx, rest):
     args = parts[1].strip() if len(parts) > 1 else ""
     handler = _COMMAND_OPS.get(op)
     if not handler:
-        return f"Unknown command op: {op!r}. Try: list, channel"
+        return f"Unknown command op: {op!r}. Try: list, channel, delay"
     return await handler(ctx, args)
 
 
@@ -654,9 +655,33 @@ async def _command_channel_change(ctx, args, add):
     return f"{command!r} channel restriction cleared (responds on any)"
 
 
+async def _command_delay(ctx, rest):
+    arg = rest.strip()
+    if not arg:
+        cur = ctx.bot.command_delay
+        return (
+            f"Command response delay: {cur:.1f}s"
+            f"{' (disabled)' if cur == 0 else ''}. "
+            "Set with: !adm command delay <seconds> (0 disables, 0.1–2.0)"
+        )
+    try:
+        seconds = float(arg)
+    except ValueError:
+        return f"Invalid delay: {arg!r}. Use seconds (0, or 0.1–2.0)."
+    try:
+        res = await ctx.bot.mgmt.set_command_delay(seconds, **_actor(ctx))
+    except MgmtError as e:
+        return e.message
+    d = res["delay"]
+    if d == 0:
+        return "Command response delay disabled"
+    return f"Command response delay set to {d:.1f}s"
+
+
 _COMMAND_OPS = {
     "list": _command_list,
     "channel": _command_channel,
+    "delay": _command_delay,
 }
 
 

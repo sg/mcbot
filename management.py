@@ -503,6 +503,31 @@ class Management:
         )
         return {"changed": True, "channels": chans}
 
+    async def command_delay(
+        self, *, actor_pubkey=None, actor_name=None,
+    ) -> dict:
+        """Current delay (seconds) applied before sending command responses
+        (0 = disabled). Read-only, not audited."""
+        return {"delay": self.bot.command_delay}
+
+    async def set_command_delay(
+        self, seconds, *, actor_pubkey=None, actor_name=None,
+    ) -> dict:
+        """Set the pre-send command-response delay in seconds: 0 to disable, or
+        0.1–2.0. Persists to the database. Audited as 'command.delay'."""
+        try:
+            seconds = float(seconds)
+        except (TypeError, ValueError):
+            raise MgmtError("delay must be a number of seconds", "invalid")
+        if seconds != 0 and not (0.1 <= seconds <= 2.0):
+            raise MgmtError("delay must be 0 (off) or between 0.1 and 2.0", "invalid")
+        await self.bot.set_command_delay(seconds)
+        await self._audit(
+            actor_pubkey, actor_name, "command.delay", None,
+            f"delay={self.bot.command_delay:.1f}s",
+        )
+        return {"delay": self.bot.command_delay}
+
     # ==================================================================
     # Outbound messages
     # ==================================================================
