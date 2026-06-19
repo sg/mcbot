@@ -4,6 +4,7 @@ import { api, wsUrl } from '../api.js'
 import { fmtTime } from '../time.js'
 import HexDump from '../components/HexDump.vue'
 import FieldBreakout from '../components/FieldBreakout.vue'
+import PacketDetail from '../components/PacketDetail.vue'
 
 const packets = ref([])
 const listEl = ref(null) // scroll container for the packet list
@@ -14,7 +15,8 @@ const listEl = ref(null) // scroll container for the packet list
 const excluded = ref(new Set())
 const knownTypes = ref(new Set())
 const selected = ref(null) // full packet row
-const decoded = ref(null) // decode response
+const decoded = ref(null) // decode response (raw packets)
+const detail = ref(null) // full row + payload/attributes (non-raw packets)
 const activeIndex = ref(-1) // hovered field index
 const error = ref('')
 let ws = null
@@ -114,13 +116,19 @@ function onKey(e) {
 async function select(p) {
   selected.value = p
   decoded.value = null
+  detail.value = null
   activeIndex.value = -1
-  if (!p.has_raw) return
   try {
-    decoded.value = await api('/packets/decode', {
-      method: 'POST',
-      json: { packet_id: p.id },
-    })
+    if (p.has_raw) {
+      decoded.value = await api('/packets/decode', {
+        method: 'POST',
+        json: { packet_id: p.id },
+      })
+    } else {
+      // non-raw packet: pull the full row (payload_json/attributes_json are
+      // omitted from the list view) so the inspector can show its details.
+      detail.value = await api(`/packets/${p.id}`)
+    }
   } catch (e) {
     error.value = e.message
   }
@@ -213,10 +221,8 @@ onUnmounted(() => {
       <div class="body">
         <div v-if="!selected" class="empty">select a packet</div>
         <template v-else-if="!selected.has_raw">
-          <div class="empty">
-            no raw bytes for this packet<br />
-            <span class="muted">(only RX_LOG_DATA packets carry on-air bytes)</span>
-          </div>
+          <PacketDetail v-if="detail" :packet="detail" />
+          <div v-else class="empty">loading…</div>
         </template>
         <template v-else-if="decoded">
           <HexDump
