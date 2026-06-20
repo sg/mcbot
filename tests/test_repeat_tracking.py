@@ -176,6 +176,69 @@ async def test_retry_attempts_same_text():
     bot.db.close()
 
 
+def _stub_channel_sender(bot):
+    # capture send_chan_msg calls; return an OK event like the real radio
+    sends = []
+
+    async def fake_send(idx, text, timestamp=None):
+        sends.append((idx, text, timestamp))
+        return SimpleNamespace(type=SimpleNamespace(name="OK"), payload={})
+
+    bot.mc = SimpleNamespace(commands=SimpleNamespace(send_chan_msg=fake_send))
+    return sends
+
+
+async def test_channel_send_always_stamps_timestamp():
+    print("test_channel_send_always_stamps_timestamp")
+    bot, *_ = make_bot(repeat_timeout=0.05)
+    bot.channel_retry_max = 0  # explicitly disabled
+    sends = _stub_channel_sender(bot)
+    await bot.send_channel_text(3, "once")
+    await asyncio.sleep(0.25)
+    check(len(sends) == 1, "no retry when channel_retry_max=0")
+    check(sends[0][2] is not None, "send carries an explicit timestamp (dedup key)")
+    check(await count_rows(bot, "RETRY") == 0, "no RETRY rows when disabled")
+    check(await count_rows(bot, "NO_REPEAT") == 1, "NO_REPEAT still emitted")
+    bot.db.close()
+
+
+async def test_channel_no_repeat_retry_exhausts():
+    print("test_channel_no_repeat_retry_exhausts")
+    bot, *_ = make_bot(repeat_timeout=0.05)
+    bot.channel_retry_max = 2
+    sends = _stub_channel_sender(bot)
+    await bot.send_channel_text(8, "ping")
+    await asyncio.sleep(0.5)
+    check(len(sends) == 3, f"original + 2 retries sent (got {len(sends)})")
+    ts0 = sends[0][2]
+    check(ts0 is not None and all(s[2] == ts0 for s in sends),
+          "every retry reuses the original timestamp")
+    check(all(s[1] == "ping" for s in sends), "text unchanged across retries")
+    check(await count_rows(bot, "RETRY") == 2, "two RETRY rows emitted")
+    check(await count_rows(bot, "NO_REPEAT") == 1,
+          "final NO_REPEAT after retries exhausted")
+    bot.db.close()
+
+
+async def test_channel_retry_stops_on_repeat():
+    print("test_channel_retry_stops_on_repeat")
+    bot, *_ = make_bot(repeat_timeout=0.1)
+    bot.channel_retry_max = 3
+    secret = os.urandom(16)
+    bot.channels_by_hash[hashlib.sha256(secret).digest()[0]] = (9, "#c", secret)
+    sends = _stub_channel_sender(bot)
+    await bot.send_channel_text(9, "yo")
+    ts0 = sends[0][2]
+    # a repeater rebroadcast heard before the first timeout -> no retries at all
+    pkt = build_channel_pkt(secret, "yo", ts=ts0)
+    await bot._match_repeat(rx_payload(pkt, GROUP, path="ab", pkt_hash=55))
+    await asyncio.sleep(0.4)
+    check(len(sends) == 1, "no retries once a repeat is heard")
+    check(await count_rows(bot, "REPEAT") == 1, "repeat recorded")
+    check(await count_rows(bot, "NO_REPEAT") == 0, "no NO_REPEAT once repeated")
+    bot.db.close()
+
+
 async def test_no_repeat_timer():
     print("test_no_repeat_timer")
     bot, *_ = make_bot(repeat_timeout=0.05)
@@ -284,6 +347,9 @@ async def main():
         test_dm_round_trip_and_inversion,
         test_multi_repeater_and_frame_dedup,
         test_retry_attempts_same_text,
+        test_channel_send_always_stamps_timestamp,
+        test_channel_no_repeat_retry_exhausts,
+        test_channel_retry_stops_on_repeat,
         test_no_repeat_timer,
         test_direct_0hop_label,
         test_repeat_before_timeout_no_norepeat,

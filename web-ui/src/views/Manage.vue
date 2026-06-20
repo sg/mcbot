@@ -65,8 +65,11 @@ async function loadTab(key, force = false) {
     if (key === 'contacts') rememberContactTypes(data.value[key])
     // Radio tab shows the current periodic flood-advert interval.
     if (key === 'radio') await loadAdvertInterval()
-    // Commands tab shows the current pre-send command-response delay.
-    if (key === 'command-config') await loadCommandDelay()
+    // Commands tab shows the pre-send response delay + no-repeat retry budget.
+    if (key === 'command-config') {
+      await loadCommandDelay()
+      await loadCommandRetry()
+    }
     // users/groups tabs (and the Users "create bot user" form) need the
     // list of group names for their group pickers.
     if (
@@ -276,6 +279,25 @@ async function applyCommandDelay() {
     n > 0 ? `Command response delay ${n.toFixed(1)}s` : 'Command response delay disabled',
   )
   await loadCommandDelay()
+}
+
+// ---- channel no-repeat retry budget (count; 0 = disabled) ----
+const commandRetry = ref(0)
+async function loadCommandRetry() {
+  try {
+    const r = await api('/command-retry')
+    commandRetry.value = r.retries
+  } catch (e) {
+    error.value = e.message
+  }
+}
+async function applyCommandRetry() {
+  const n = Number(commandRetry.value)
+  await run(
+    api('/command-retry', { method: 'POST', json: { retries: n } }),
+    n > 0 ? `Channel no-repeat retries ${n}` : 'Channel no-repeat retry disabled',
+  )
+  await loadCommandRetry()
 }
 
 // ---- radio contact-table rollover ----
@@ -947,6 +969,21 @@ onMounted(() => loadTab('stats'))
             </label>
             <button @click="applyCommandDelay">Apply</button>
             <InfoTip text="0 = disabled, otherwise 0.1–2.0s. Held right before each reply is transmitted (after lookups/queries), to test whether nearby repeaters miss replies sent too quickly. Persists in the database (mcbot.conf only seeds the first-run default)." />
+          </div>
+          <div class="toolbar">
+            <label class="chk">
+              Channel resend on no-repeat
+              <input
+                type="number"
+                min="0"
+                max="5"
+                step="1"
+                v-model.number="commandRetry"
+                style="width: 5em"
+              />
+            </label>
+            <button @click="applyCommandRetry">Apply</button>
+            <InfoTip text="0 = disabled, otherwise up to 5. If a channel message the bot sent gets no repeater rebroadcast within the repeat window, resend it this many times — an identical retransmit (same timestamp) that only repeaters which missed it pick up, so no duplicates. Needs repeat tracking on. Persists in the database (mcbot.conf only seeds the first-run default)." />
           </div>
           <table>
             <thead>

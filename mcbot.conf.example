@@ -74,6 +74,17 @@ enabled = true
 ; that delivery failed. Default: true / 5 seconds.
 ;repeat_tracking = true
 ;repeat_timeout = 5
+; If a CHANNEL message the bot sent gets NO_REPEAT, resend it up to this many
+; times (0 = off, max 5; default 2). Each retry waits another repeat_timeout, is
+; shown as a RETRY row, and stops early as soon as a repeater is heard. The
+; retry reuses the original message timestamp so it is byte-identical: MeshCore
+; keys a channel message by SHA256(timestamp||text), so nodes that already heard
+; it de-dupe it and only repeaters that missed it pick it up (no duplicate
+; messages). Needs repeat_tracking = true. DMs are excluded (they have
+; ACK-driven retry). FIRST-RUN SEED only: copied into the database on first
+; start, then runtime-managed via '!adm command retry N' or the web
+; Manage->Commands page (persists across restarts).
+;channel_retry_max = 2
 ; Path to the exported radio private key (0600). Default: <db>.privkey
 ;privkey_path = ./mcbot.privkey
 ; Comma-separated full pubkeys bootstrapped into the 'owner' group on every

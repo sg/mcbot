@@ -27,6 +27,8 @@ const TYPE_INFO = {
   REPEAT: "A repeater was heard rebroadcasting a message the bot sent (delivery is propagating).",
   NO_REPEAT:
     "No repeater was heard rebroadcasting the bot's message within the timeout window.",
+  RETRY:
+    "No repeater was heard, so the bot resent the channel message — an identical retransmit (same timestamp) that only repeaters which missed it pick up.",
   DIRECT_0HOP:
     "The bot's DM went straight to a 0-hop neighbor, so no repeater is involved — nothing to rebroadcast.",
   PATH_UPDATE: "Routing-path information for a contact was updated.",

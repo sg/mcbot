@@ -1025,6 +1025,9 @@ name, first 6 hex chars of pubkey, and ISO-format `last_advert` time.
 !adm command delay <seconds>               delay before transmitting any
                                            command reply (0 disables, else
                                            0.1–2.0); persists in the database
+!adm command retry <count>                 resend a channel reply if no repeater
+                                           rebroadcast is heard (0 disables,
+                                           max 5); persists in the database
 ```
 
 `!adm command delay` inserts a fixed pause right before each command response
@@ -1034,6 +1037,17 @@ the bot's sends when it replies too quickly. The value is seeded from
 `[bot] command_delay` in `mcbot.conf` on first run, then DB-authoritative and
 also settable on the web **Manage → Commands** page (changes persist across
 restarts).
+
+`!adm command retry` controls how many times a **channel** message the bot sent
+is resent when no repeater rebroadcast is heard within `repeat_timeout`. The
+resend reuses the original message timestamp so it is byte-identical — MeshCore
+keys a channel message by `SHA256(timestamp‖text)`, so nodes that already heard
+it de-dupe it and only repeaters that missed it pick it up (no duplicates). It
+stops early as soon as a repeat is heard, and each attempt shows as a `RETRY`
+row on the web Packets screen. Requires `repeat_tracking = true`; DMs are
+excluded (they have ACK-driven retry). Seeded from `[bot] channel_retry_max`
+(default 2) on first run, then DB-authoritative and also settable on the web
+**Manage → Commands** page.
 
 `!adm command channel add/remove` edits `command_config.allowed_channels`
 (a JSON array). Because the dispatcher reads that column fresh on every
