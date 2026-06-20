@@ -405,6 +405,16 @@ class Config:
     # within repeat_timeout seconds, log + surface that.
     repeat_tracking: bool = True
     repeat_timeout: float = 5.0
+    # When a CHANNEL message the bot sent gets no repeater heard within
+    # repeat_timeout, resend it up to this many times (0 = off, default 2). The
+    # retry is an idempotent retransmit — MeshCore keys a channel message by
+    # SHA256(timestamp||text), so reusing the original timestamp makes the retry
+    # byte-identical: nodes that already heard it de-dupe it, only repeaters
+    # that missed it pick it up. Requires repeat_tracking. DMs are excluded
+    # (they have their own ACK-driven retry). SEED only: first run writes it to
+    # bot_meta, then the DB value is authoritative and runtime-managed (via
+    # '!adm command retry N' and the web Manage->Commands page).
+    channel_retry_max: int = 2
     debug: bool = False
     # idx -> (name, 16-byte secret)
     channels: dict[int, tuple[str, bytes]] = field(default_factory=dict)
@@ -470,6 +480,7 @@ _KNOWN_CONFIG_KEYS = {
     "channel_logging": {"channels"},
     "logging": {"logs_dir", "log_level"},
     "bot": {"commands_dir", "enabled", "repeat_tracking", "repeat_timeout",
+            "channel_retry_max",
             "privkey_path", "dm_max_attempts", "dm_flood_after",
             "dm_max_flood_attempts", "radio_evict_enabled",
             "radio_evict_headroom", "radio_evict_max_per_run",
@@ -569,6 +580,9 @@ def load_config(args) -> Config:
             cfg.repeat_timeout = parser["bot"].getfloat(
                 "repeat_timeout", cfg.repeat_timeout
             )
+            cfg.channel_retry_max = min(5, max(0, parser["bot"].getint(
+                "channel_retry_max", cfg.channel_retry_max
+            )))
             pk = parser["bot"].get("privkey_path", "")
             if pk:
                 cfg.privkey_path = Path(pk)
@@ -1195,6 +1209,11 @@ class RepeatWatch:
     route_mode: str = "unknown"
     registered_at: float = 0.0             # monotonic, at send start
     send_completed_at: Optional[float] = None
+    # message timestamp used on the send (epoch secs). reused verbatim on a
+    # no-repeat retry so the retransmit is byte-identical (MeshCore de-dups by
+    # SHA256(timestamp||text)). channel sends only.
+    send_timestamp: Optional[int] = None
+    retries_left: int = 0                   # remaining no-repeat resends (channel)
     seen_frames: set = field(default_factory=set)   # {(pkt_hash, path_hex)}
     repeat_count: int = 0
     repeater_keys: set = field(default_factory=set)  # repeater path evidence
@@ -1319,6 +1338,9 @@ class MCBot:
         # cfg, then DB-authoritative (loaded via _load_command_delay at startup,
         # persisted by set_command_delay).
         self.command_delay: float = cfg.command_delay
+        # no-repeat channel resend budget. seeded from cfg, then DB-authoritative
+        # (loaded via _load_channel_retry_max, persisted by set_channel_retry_max).
+        self.channel_retry_max: int = cfg.channel_retry_max
 
     # channel logging filter
     def _parse_log_channels(self) -> None:
@@ -1845,14 +1867,54 @@ class MCBot:
         if watch.done:
             self._discard_watch(watch)
             return
+        # A repeat was heard -> success; let the watch lapse, no retry.
+        if watch.repeat_count > 0:
+            watch.done = True
+            self._discard_watch(watch)
+            return
+        # No repeat heard. For channel sends, retry the (idempotent) retransmit
+        # if attempts remain; re-arm the same watch so a later repeat still
+        # counts. Otherwise surface the final NO_REPEAT (or DIRECT_0HOP).
+        if watch.kind == "channel" and watch.retries_left > 0:
+            watch.retries_left -= 1
+            try:
+                await self._retry_channel_watch(watch)
+            except Exception:
+                self.logger.exception(
+                    "channel no-repeat retry failed; giving up"
+                )
+            else:
+                self._start_repeat_timer(watch)
+                return
         watch.done = True
         try:
-            if watch.repeat_count == 0:
-                await self._emit_no_repeat(watch)
+            await self._emit_no_repeat(watch)
         except Exception:
             self.logger.exception("repeat-timeout handler failed")
         finally:
             self._discard_watch(watch)
+
+    async def _retry_channel_watch(self, watch: RepeatWatch) -> None:
+        # Resend with the ORIGINAL timestamp so the packet is byte-identical:
+        # MeshCore keys a channel message by SHA256(timestamp||text), so nodes
+        # that already heard it de-dupe the retry and only repeaters that missed
+        # it pick it up. Surfaced as a RETRY row on the web Packets screen.
+        snippet = (
+            watch.text[:60] + "…" if len(watch.text) > 60 else watch.text
+        )
+        self.logger.info(
+            "RETRY ch=%s: no repeat in %.0fs, resending (%d left): %r",
+            watch.channel_idx, self.cfg.repeat_timeout,
+            watch.retries_left, snippet,
+        )
+        await self._emit_synthetic_packet(
+            packet_type="RETRY",
+            text=watch.text,
+            channel_idx=watch.channel_idx,
+        )
+        await self.mc.commands.send_chan_msg(
+            watch.channel_idx, watch.text, timestamp=watch.send_timestamp,
+        )
 
     def _matches_active_channel_watch(
         self, channel_idx: Optional[int], text: str
@@ -3627,6 +3689,36 @@ class MCBot:
             " (disabled)" if self.command_delay == 0 else "",
         )
 
+    # --- channel no-repeat retry budget (seeded from config, then DB-managed) ---
+    async def _load_channel_retry_max(self) -> None:
+        # DB is authoritative; seed it from config on first run (key absent).
+        row = await self.db.fetchone(
+            "SELECT value FROM bot_meta WHERE key='channel_retry_max'"
+        )
+        val = row["value"] if row else None
+        try:
+            self.channel_retry_max = min(5, max(0, int(val)))
+        except (TypeError, ValueError):
+            self.channel_retry_max = self.cfg.channel_retry_max
+            await self.db.execute(
+                "INSERT INTO bot_meta(key,value) VALUES('channel_retry_max',?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (str(self.channel_retry_max),),
+            )
+
+    async def set_channel_retry_max(self, count: int) -> None:
+        self.channel_retry_max = min(5, max(0, int(count)))
+        await self.db.execute(
+            "INSERT INTO bot_meta(key,value) VALUES('channel_retry_max',?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (str(self.channel_retry_max),),
+        )
+        self.logger.info(
+            "channel no-repeat retry budget set to %d%s",
+            self.channel_retry_max,
+            " (disabled)" if self.channel_retry_max == 0 else "",
+        )
+
     async def send_channel_text(self, channel_idx: int, text: str):
         # single-shot channel send (channel messages have no ACK). returns
         # the radio Event (or None); logs a rejection. no exception on error.
@@ -3634,10 +3726,16 @@ class MCBot:
         self.logger.info(
             "sending channel msg ch=%d: %r", channel_idx, snippet
         )
+        # Stamp the message ourselves so a no-repeat retry can resend with the
+        # SAME timestamp (idempotent retransmit — see _retry_channel_watch).
+        ts = int(time.time())
         watch = self._register_repeat_watch(
             kind="channel", text=text, channel_idx=channel_idx,
         )
-        ev = await self.mc.commands.send_chan_msg(channel_idx, text)
+        if watch is not None:
+            watch.send_timestamp = ts
+            watch.retries_left = max(0, int(self.channel_retry_max))
+        ev = await self.mc.commands.send_chan_msg(channel_idx, text, timestamp=ts)
         self._start_repeat_timer(watch)
         if ev is not None and getattr(ev.type, "name", "") == "ERROR":
             p = ev.payload if isinstance(ev.payload, dict) else {}
@@ -3801,6 +3899,7 @@ class MCBot:
         await self.seed_command_configs()
         await self._load_advert_interval()
         await self._load_command_delay()
+        await self._load_channel_retry_max()
 
         # ensure radio contact-table headroom on startup (device_info +
         # contacts have been synced above; owners are bootstrapped into

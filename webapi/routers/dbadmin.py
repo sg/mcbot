@@ -546,3 +546,27 @@ async def set_command_delay(
         )
     except MgmtError as e:
         raise http_for_mgmt(e)
+
+
+@router.get("/command-retry")
+async def command_retry(
+    bot=Depends(get_bot), identity: str = Depends(require_auth),
+):
+    return await bot.mgmt.channel_retry(**actor_kwargs(identity))
+
+
+class CommandRetryBody(BaseModel):
+    retries: int = 0
+
+
+@router.post("/command-retry")
+async def set_command_retry(
+    body: CommandRetryBody,
+    bot=Depends(get_bot), identity: str = Depends(require_auth),
+):
+    try:
+        return await bot.mgmt.set_channel_retry(
+            body.retries, **actor_kwargs(identity),
+        )
+    except MgmtError as e:
+        raise http_for_mgmt(e)

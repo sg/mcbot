@@ -61,6 +61,7 @@ _HELP = [
     ("command channel add <cmd> <ch>",   "add a channel the command responds on"),
     ("command channel remove <cmd> <ch>", "stop a command responding on a channel"),
     ("command delay <seconds>",          "delay before sending replies (0 off, 0.1–2.0)"),
+    ("command retry <count>",            "resend a channel reply if no repeat heard (0 off, max 5)"),
     ("radio pathhash [1|2|3]",           "show/set this radio's outgoing path-hash width"),
     ("advert <flood|zero>",              "send a flood or zero-hop advertisement"),
     ("advert interval <hours>",          "send a flood advert every N hours (0 disables)"),
@@ -576,7 +577,7 @@ async def _cmd_command(ctx, rest):
     args = parts[1].strip() if len(parts) > 1 else ""
     handler = _COMMAND_OPS.get(op)
     if not handler:
-        return f"Unknown command op: {op!r}. Try: list, channel, delay"
+        return f"Unknown command op: {op!r}. Try: list, channel, delay, retry"
     return await handler(ctx, args)
 
 
@@ -678,10 +679,34 @@ async def _command_delay(ctx, rest):
     return f"Command response delay set to {d:.1f}s"
 
 
+async def _command_retry(ctx, rest):
+    arg = rest.strip()
+    if not arg:
+        cur = ctx.bot.channel_retry_max
+        return (
+            f"Channel no-repeat retries: {cur}"
+            f"{' (disabled)' if cur == 0 else ''}. "
+            "Set with: !adm command retry <count> (0 disables, max 5)"
+        )
+    try:
+        count = int(arg)
+    except ValueError:
+        return f"Invalid retry count: {arg!r}. Use a whole number (0–5)."
+    try:
+        res = await ctx.bot.mgmt.set_channel_retry(count, **_actor(ctx))
+    except MgmtError as e:
+        return e.message
+    n = res["retries"]
+    if n == 0:
+        return "Channel no-repeat retry disabled"
+    return f"Channel no-repeat retries set to {n}"
+
+
 _COMMAND_OPS = {
     "list": _command_list,
     "channel": _command_channel,
     "delay": _command_delay,
+    "retry": _command_retry,
 }
 
 

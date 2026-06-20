@@ -528,6 +528,32 @@ class Management:
         )
         return {"delay": self.bot.command_delay}
 
+    async def channel_retry(
+        self, *, actor_pubkey=None, actor_name=None,
+    ) -> dict:
+        """Current no-repeat channel resend budget (0 = disabled). Read-only,
+        not audited."""
+        return {"retries": self.bot.channel_retry_max}
+
+    async def set_channel_retry(
+        self, count, *, actor_pubkey=None, actor_name=None,
+    ) -> dict:
+        """Set how many times a channel message with no repeat heard is resent
+        (0 to disable, max 5). Persists to the database. Audited as
+        'command.retry'."""
+        try:
+            count = int(count)
+        except (TypeError, ValueError):
+            raise MgmtError("retries must be a whole number", "invalid")
+        if not (0 <= count <= 5):
+            raise MgmtError("retries must be between 0 and 5", "invalid")
+        await self.bot.set_channel_retry_max(count)
+        await self._audit(
+            actor_pubkey, actor_name, "command.retry", None,
+            f"retries={self.bot.channel_retry_max}",
+        )
+        return {"retries": self.bot.channel_retry_max}
+
     # ==================================================================
     # Outbound messages
     # ==================================================================
