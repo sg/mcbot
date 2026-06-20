@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { api } from '../api.js'
 import { fmtDateTime } from '../time.js'
 import InfoTip from '../components/InfoTip.vue'
@@ -655,6 +655,43 @@ const visibleContacts = computed(() => {
   return filtered
 })
 
+// keyboard nav (Contacts tab): Up/Down move the selected row through the
+// visible list and populate the detail pane. Mirrors the Packets screen.
+const contactListEl = ref(null)
+function scrollContactIntoView(pk) {
+  contactListEl.value
+    ?.querySelector(`[data-pk="${pk}"]`)
+    ?.scrollIntoView({ block: 'nearest' })
+}
+function selectContactByOffset(delta) {
+  const list = visibleContacts.value
+  if (!list.length) return
+  const cur = detailContact.value
+    ? list.findIndex((c) => c.public_key === detailContact.value.public_key)
+    : -1
+  // nothing selected yet -> Down starts at the top, Up at the bottom
+  const i = cur === -1
+    ? (delta > 0 ? 0 : list.length - 1)
+    : Math.max(0, Math.min(list.length - 1, cur + delta))
+  const c = list[i]
+  selectContact(c)
+  nextTick(() => scrollContactIntoView(c.public_key))
+}
+function onContactKey(e) {
+  if (active.value !== 'contacts') return
+  if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return
+  const t = e.target
+  if (
+    t &&
+    (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' ||
+      t.tagName === 'SELECT' || t.isContentEditable)
+  )
+    return
+  if (e.metaKey || e.ctrlKey || e.altKey) return
+  e.preventDefault()
+  selectContactByOffset(e.key === 'ArrowUp' ? -1 : 1)
+}
+
 function cols(rows) {
   return rows && rows.length ? Object.keys(rows[0]).filter((c) => !c.startsWith('_')) : []
 }
@@ -670,7 +707,11 @@ function cellAt(row, c) {
   return cell(row[c])
 }
 
-onMounted(() => loadTab('stats'))
+onMounted(() => {
+  loadTab('stats')
+  window.addEventListener('keydown', onContactKey)
+})
+onUnmounted(() => window.removeEventListener('keydown', onContactKey))
 </script>
 
 <template>
@@ -1049,7 +1090,7 @@ onMounted(() => loadTab('stats'))
               </button>
               <span class="muted">{{ visibleContacts.length }} shown</span>
             </div>
-            <div class="body">
+            <div class="body" ref="contactListEl">
               <table>
                 <thead>
                   <tr>
@@ -1084,6 +1125,7 @@ onMounted(() => loadTab('stats'))
                   <tr
                     v-for="c in visibleContacts"
                     :key="c.public_key"
+                    :data-pk="c.public_key"
                     class="clickable"
                     :class="{ selected: detailContact && detailContact.public_key === c.public_key }"
                     @click="selectContact(c)"
