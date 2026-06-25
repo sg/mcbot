@@ -50,18 +50,98 @@ def _haversine(lat1, lon1, lat2, lon2, unit):
     return 2 * r * math.asin(math.sqrt(a))
 
 
-async def _resolve_hop_named(ctx, hop_hex):
-    # "map a path-hop hex prefix to (lat, lon, name), or None when it
-    # doesn't resolve to exactly one contact carrying a location.
+def _num(v):
+    # device_info values are JSON-encoded; decode to float (None if missing).
+    try:
+        return float(json.loads(v))
+    except (TypeError, ValueError):
+        return None
+
+
+async def _bot_location(ctx):
+    # the bot's own advertised location (degrees), or None if unset (0/0).
     rows = await ctx.bot.db.fetchall(
-        "SELECT adv_lat, adv_lon, adv_name FROM contacts "
-        "WHERE substr(public_key,1,?)=? "
-        "AND adv_lat IS NOT NULL AND adv_lat!=0 AND adv_lon!=0",
-        (len(hop_hex), hop_hex),
+        "SELECT key, value FROM device_info "
+        "WHERE key IN ('self_info.adv_lat','self_info.adv_lon')"
     )
-    if len(rows) == 1:
-        return (rows[0]["adv_lat"], rows[0]["adv_lon"], rows[0]["adv_name"])
-    return None
+    d = {r["key"]: r["value"] for r in rows}
+    lat = _num(d.get("self_info.adv_lat"))
+    lon = _num(d.get("self_info.adv_lon"))
+    if lat is None or lon is None or (lat == 0 and lon == 0):
+        return None
+    return (lat, lon)
+
+
+async def _sender_location(ctx):
+    # best-effort far-end anchor: the message sender's advertised location.
+    pk = ctx.sender_pubkey
+    if not pk:
+        return None
+    row = await ctx.bot.db.fetchone(
+        "SELECT adv_lat, adv_lon FROM contacts WHERE public_key=? "
+        "AND adv_lat IS NOT NULL AND adv_lat!=0 AND adv_lon!=0",
+        (pk.lower(),),
+    )
+    return (row["adv_lat"], row["adv_lon"]) if row else None
+
+
+async def _resolve_hops(ctx, hops):
+    """Resolve each path hop to (lat, lon, name) or None.
+
+    Path hops are repeater/room hashes (the leading bytes of the repeater's
+    pubkey), which can collide across contacts. The old resolver matched any
+    contact type and trusted "exactly one located contact" — which silently
+    picked the WRONG repeater whenever only the wrong one (e.g. a far node
+    pulled in by tropospheric ducting) carried a location while the correct
+    local hop had none. Now:
+      - only repeater/room contacts are candidates (clients never repeat);
+      - a hop whose hash matches a single contact is trusted, even if distant
+        (a unique hash is unambiguous);
+      - a colliding hop is placed only when >= 2 of its candidates carry a
+        location and one is the clear nearest to a trusted anchor (the bot's
+        own location, the sender, or an already-unambiguous hop). A lone
+        located candidate among a collision is ambiguous and left unlocated,
+        so a wrong distance is never shown.
+    """
+    per_hop = []
+    for h in hops:
+        rows = await ctx.bot.db.fetchall(
+            "SELECT adv_lat, adv_lon, adv_name FROM contacts "
+            "WHERE type IN (2, 3) AND substr(public_key,1,?)=?",
+            (len(h), h),
+        )
+        located = [
+            (r["adv_lat"], r["adv_lon"], r["adv_name"])
+            for r in rows
+            if r["adv_lat"] not in (None, 0) and r["adv_lon"] not in (None, 0)
+        ]
+        per_hop.append((len(rows), located))
+
+    anchors = []
+    for loc in (await _bot_location(ctx), await _sender_location(ctx)):
+        if loc:
+            anchors.append(loc)
+
+    resolved = [None] * len(hops)
+    # pass 1: unambiguous hops (single matching contact) are trusted and seed
+    # the anchor set used to disambiguate any collisions.
+    for i, (n, located) in enumerate(per_hop):
+        if n == 1 and located:
+            resolved[i] = located[0]
+            anchors.append((located[0][0], located[0][1]))
+
+    # pass 2: collisions — choose the located candidate nearest a trusted
+    # anchor, but only when at least two candidates are located (otherwise the
+    # right one can't be told apart from the impostor → leave unlocated).
+    for i, (n, located) in enumerate(per_hop):
+        if n > 1 and len(located) >= 2 and anchors:
+            resolved[i] = min(
+                located,
+                key=lambda p: min(
+                    _haversine(p[0], p[1], a[0], a[1], "mi") for a in anchors
+                ),
+            )
+    return resolved
 
 
 def _pin_symbol(i):
@@ -193,8 +273,9 @@ async def handle(ctx):
     path_str = ",".join(hops)
     nh = len(hops)
 
-    # resolve hops with names for the map markers
-    named = [await _resolve_hop_named(ctx, h) for h in hops]
+    # resolve hops with names for the map markers (collision-aware; see
+    # _resolve_hops — a far repeater sharing a path hash no longer wins)
+    named = await _resolve_hops(ctx, hops)
     loc = [p for p in named if p]
     n_located = len(loc)
 
