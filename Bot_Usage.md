@@ -887,8 +887,14 @@ in one reply. Arguments:
   pin is still generated: `dist unavailable (1/total), <url>`.
 - Zero located hops → `dist/map unavailable (0/total)`; a direct (no-hop)
   message → `direct (no path)`.
-- Reliability note: 1-byte path hashes collide (many repeaters share a first
-  byte), so results are most reliable on 2- and 3-byte paths.
+- Reliability note: path hashes can collide (several repeaters share the same
+  leading byte(s)), so results are most reliable on 2- and 3-byte paths. Hops
+  resolve only against repeater/room contacts. When a hash matches more than
+  one repeater, the hop is placed only if a candidate is clearly the closest
+  fit to a known anchor (the bot's own location, the sender, or an
+  unambiguous neighbouring hop); otherwise it is left unlocated rather than
+  risk using a far repeater that merely shares the hash. Setting the bot's own
+  location on the radio improves this disambiguation.
 
 - 10s per-user cooldown; no auth; works in DM and any allowed channel.
 - Makes a da.gd shortener call per invocation (when ≥2 hops are located).
