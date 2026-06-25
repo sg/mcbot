@@ -889,12 +889,17 @@ in one reply. Arguments:
   message → `direct (no path)`.
 - Reliability note: path hashes can collide (several repeaters share the same
   leading byte(s)), so results are most reliable on 2- and 3-byte paths. Hops
-  resolve only against repeater/room contacts. When a hash matches more than
-  one repeater, the hop is placed only if a candidate is clearly the closest
-  fit to a known anchor (the bot's own location, the sender, or an
-  unambiguous neighbouring hop); otherwise it is left unlocated rather than
-  risk using a far repeater that merely shares the hash. Setting the bot's own
-  location on the radio improves this disambiguation.
+  resolve only against repeater/room contacts. A hop matching a single repeater
+  is always trusted. When a hash matches more than one repeater, the hop is
+  placed only if the nearest located candidate lies within
+  `[bot] path_collision_radius_miles` (default 150) of a known anchor — the
+  bot's own location, the sender, or an unambiguous neighbouring hop —
+  otherwise it is left unlocated rather than risk a far repeater that merely
+  shares the hash (e.g. one pulled in by tropospheric ducting). Set the radius
+  to `0` to disable that bound (collisions then resolve only when ≥2 candidates
+  are located). Any one anchor enables this — the bot's own location, the
+  sender, or an unambiguously-located neighbouring hop — so setting the bot's
+  own location on the radio helps but isn't required.
 
 - 10s per-user cooldown; no auth; works in DM and any allowed channel.
 - Makes a da.gd shortener call per invocation (when ≥2 hops are located).

@@ -149,6 +149,72 @@ async def test_sender_anchor_used_when_no_bot_location():
     bot.db.close()
 
 
+async def test_collision_lone_local_within_radius_accepted():
+    print("test_collision_lone_local_within_radius_accepted")
+    bot = make_bot()
+    await set_bot_location(bot, 32.0, -96.0)
+    # collision where the only located candidate is the correct LOCAL hop (a
+    # few miles from the bot); a geoless repeater shares the hash. Within the
+    # radius it must be kept (the regression the radius restores).
+    await add_contact(bot, pk("abcd0"), name="local", lat=32.05, lon=-96.05)
+    await add_contact(bot, pk("abcd1"), name="noloc", lat=None, lon=None)
+    res = await pathcmd._resolve_hops(ctx_for(bot), ["abcd"])
+    check(res[0] is not None and res[0][2] == "local",
+          f"lone local hop within radius is kept (got {res[0]})")
+    bot.db.close()
+
+
+async def test_collision_radius_gates_acceptance():
+    print("test_collision_radius_gates_acceptance")
+    bot = make_bot()
+    await set_bot_location(bot, 32.0, -96.0)
+    # lone located candidate ~69 mi north of the bot, colliding with a geoless one
+    await add_contact(bot, pk("abcd0"), name="hop", lat=33.0, lon=-96.0)
+    await add_contact(bot, pk("abcd1"), name="noloc", lat=None, lon=None)
+
+    bot.cfg.path_collision_radius_miles = 150
+    res = await pathcmd._resolve_hops(ctx_for(bot), ["abcd"])
+    check(res[0] is not None and res[0][2] == "hop", "within 150mi radius -> accepted")
+
+    bot.cfg.path_collision_radius_miles = 50
+    res = await pathcmd._resolve_hops(ctx_for(bot), ["abcd"])
+    check(res == [None], "beyond 50mi radius -> rejected")
+
+    bot.cfg.path_collision_radius_miles = 0
+    res = await pathcmd._resolve_hops(ctx_for(bot), ["abcd"])
+    check(res == [None], "radius 0 -> lone candidate never trusted (conservative)")
+    bot.db.close()
+
+
+async def test_neighbour_hop_anchors_without_bot_or_sender():
+    print("test_neighbour_hop_anchors_without_bot_or_sender")
+    bot = make_bot()  # no bot location, no sender
+    # hop 1 matches a single located repeater -> resolves and becomes an anchor
+    await add_contact(bot, pk("aaaa"), name="anchorhop", lat=32.0, lon=-96.0)
+    # hop 2 collides: a nearby located hop + a geoless one. The only anchor is
+    # the neighbouring hop, which must be enough to keep the local candidate.
+    await add_contact(bot, pk("abcd0"), name="near", lat=32.1, lon=-96.1)
+    await add_contact(bot, pk("abcd1"), name="noloc", lat=None, lon=None)
+    res = await pathcmd._resolve_hops(ctx_for(bot), ["aaaa", "abcd"])
+    check(res[0] is not None and res[0][2] == "anchorhop", "unambiguous hop resolved")
+    check(res[1] is not None and res[1][2] == "near",
+          "neighbouring located hop anchors the collision (no bot/sender loc)")
+    bot.db.close()
+
+
+async def test_radius_zero_still_disambiguates_two_located():
+    print("test_radius_zero_still_disambiguates_two_located")
+    bot = make_bot()
+    await set_bot_location(bot, 32.0, -96.0)
+    await add_contact(bot, pk("abcd0"), name="near", lat=32.1, lon=-96.1)
+    await add_contact(bot, pk("abcd1"), name="far", lat=30.0, lon=-92.0)
+    bot.cfg.path_collision_radius_miles = 0
+    res = await pathcmd._resolve_hops(ctx_for(bot), ["abcd"])
+    check(res[0] is not None and res[0][2] == "near",
+          "radius 0 still picks nearest when >=2 located")
+    bot.db.close()
+
+
 async def main():
     for t in (
         test_collision_only_far_has_geo_is_unlocated,
@@ -157,6 +223,10 @@ async def main():
         test_non_repeater_excluded,
         test_unique_geoless_hop_is_unlocated,
         test_sender_anchor_used_when_no_bot_location,
+        test_collision_lone_local_within_radius_accepted,
+        test_collision_radius_gates_acceptance,
+        test_neighbour_hop_anchors_without_bot_or_sender,
+        test_radius_zero_still_disambiguates_two_located,
     ):
         await t()
     print()

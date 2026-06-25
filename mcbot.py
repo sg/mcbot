@@ -415,6 +415,17 @@ class Config:
     # bot_meta, then the DB value is authoritative and runtime-managed (via
     # '!adm command retry N' and the web Manage->Commands page).
     channel_retry_max: int = 2
+    # !path collision disambiguation: when a path-hop hash matches more than one
+    # repeater, a candidate is accepted only if it lies within this many miles of
+    # a trusted anchor (the bot's own location, the sender, or an unambiguous
+    # neighbouring hop). This is a single-hop RF sanity bound that rejects a far
+    # repeater sharing the hash (e.g. a tropospheric-ducting node) while keeping
+    # a correctly-located local hop. Applies ONLY to collisions; unique hops are
+    # always trusted. 0 disables it (collisions then resolve only when >= 2
+    # candidates are located). Takes effect whenever the path has at least one
+    # anchor (any of the three above); the bot's own location helps but is not
+    # required if a neighbouring hop resolves unambiguously.
+    path_collision_radius_miles: float = 150.0
     debug: bool = False
     # idx -> (name, 16-byte secret)
     channels: dict[int, tuple[str, bytes]] = field(default_factory=dict)
@@ -480,7 +491,7 @@ _KNOWN_CONFIG_KEYS = {
     "channel_logging": {"channels"},
     "logging": {"logs_dir", "log_level"},
     "bot": {"commands_dir", "enabled", "repeat_tracking", "repeat_timeout",
-            "channel_retry_max",
+            "channel_retry_max", "path_collision_radius_miles",
             "privkey_path", "dm_max_attempts", "dm_flood_after",
             "dm_max_flood_attempts", "radio_evict_enabled",
             "radio_evict_headroom", "radio_evict_max_per_run",
@@ -583,6 +594,9 @@ def load_config(args) -> Config:
             cfg.channel_retry_max = min(5, max(0, parser["bot"].getint(
                 "channel_retry_max", cfg.channel_retry_max
             )))
+            cfg.path_collision_radius_miles = max(0.0, parser["bot"].getfloat(
+                "path_collision_radius_miles", cfg.path_collision_radius_miles
+            ))
             pk = parser["bot"].get("privkey_path", "")
             if pk:
                 cfg.privkey_path = Path(pk)
