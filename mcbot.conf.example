@@ -85,6 +85,19 @@ enabled = true
 ; start, then runtime-managed via '!adm command retry N' or the web
 ; Manage->Commands page (persists across restarts).
 ;channel_retry_max = 2
+; !path collision disambiguation radius, in MILES. When a path-hop hash matches
+; more than one repeater, a candidate is accepted only if it lies within this
+; distance of a trusted anchor (the bot's own location, the message sender, or
+; an unambiguous neighbouring hop). This rejects a far repeater that merely
+; shares the hash (e.g. one pulled in by tropospheric ducting) while keeping a
+; correctly-located local hop — even when it is the only located candidate.
+; Applies ONLY to hash collisions; a hop matching a single repeater is always
+; trusted. Set 0 to disable the bound (collisions then resolve only when >= 2
+; candidates are located). Works whenever the path has at least one anchor — the
+; bot's own location, the message sender, or an unambiguously-located
+; neighbouring hop — so the bot's own location helps but isn't required.
+; Default: 150.
+;path_collision_radius_miles = 150
 ; Path to the exported radio private key (0600). Default: <db>.privkey
 ;privkey_path = ./mcbot.privkey
 ; Comma-separated full pubkeys bootstrapped into the 'owner' group on every

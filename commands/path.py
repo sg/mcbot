@@ -97,11 +97,15 @@ async def _resolve_hops(ctx, hops):
       - only repeater/room contacts are candidates (clients never repeat);
       - a hop whose hash matches a single contact is trusted, even if distant
         (a unique hash is unambiguous);
-      - a colliding hop is placed only when >= 2 of its candidates carry a
-        location and one is the clear nearest to a trusted anchor (the bot's
-        own location, the sender, or an already-unambiguous hop). A lone
-        located candidate among a collision is ambiguous and left unlocated,
-        so a wrong distance is never shown.
+      - a colliding hop is resolved to the located candidate nearest a trusted
+        anchor (the bot's own location, the sender, or an already-unambiguous
+        hop), but ONLY if that candidate is within cfg.path_collision_radius_miles
+        of the anchor — a single-hop RF sanity bound. This keeps a correctly-
+        located local hop even when it's the only located candidate, while
+        rejecting a far repeater that merely shares the hash (tropo ducting).
+        Radius 0 disables the bound: collisions then resolve only when >= 2
+        candidates are located (the conservative fallback). With no anchors at
+        all, collisions stay unlocated.
     """
     per_hop = []
     for h in hops:
@@ -131,16 +135,22 @@ async def _resolve_hops(ctx, hops):
             anchors.append((located[0][0], located[0][1]))
 
     # pass 2: collisions — choose the located candidate nearest a trusted
-    # anchor, but only when at least two candidates are located (otherwise the
-    # right one can't be told apart from the impostor → leave unlocated).
+    # anchor, accepting it only within the configured radius (a one-hop RF
+    # sanity bound). radius 0 falls back to "place only when >= 2 located".
+    radius = ctx.bot.cfg.path_collision_radius_miles
+
+    def nearest_anchor_mi(p):
+        return min(_haversine(p[0], p[1], a[0], a[1], "mi") for a in anchors)
+
     for i, (n, located) in enumerate(per_hop):
-        if n > 1 and len(located) >= 2 and anchors:
-            resolved[i] = min(
-                located,
-                key=lambda p: min(
-                    _haversine(p[0], p[1], a[0], a[1], "mi") for a in anchors
-                ),
-            )
+        if n <= 1 or not located or not anchors:
+            continue
+        best = min(located, key=nearest_anchor_mi)
+        if radius > 0:
+            if nearest_anchor_mi(best) <= radius:
+                resolved[i] = best
+        elif len(located) >= 2:
+            resolved[i] = best
     return resolved
 
 
