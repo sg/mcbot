@@ -904,6 +904,31 @@ in one reply. Arguments:
 - 10s per-user cooldown; no auth; works in DM and any allowed channel.
 - Makes a da.gd shortener call per invocation (when ≥2 hops are located).
 
+### `!topo` / `!topo <prefix>` / `!topo help`
+
+Plots a contact's advertised location on [OpenTopoMap](https://opentopomap.org)
+and replies with a da.gd-shortened marker link (zoom 16).
+
+```
+!topo a1b2c3      → @[Alice] HillTop https://da.gd/abcd
+!topo             → (your own location)  @[Alice] Alice https://da.gd/abcd
+!topo help        → @[Alice] !topo [pub-key prefix] (4+ chars)
+```
+
+- The argument is a **pubkey prefix, 4+ hex chars**; shorter prefixes get the
+  usage line. The contact is matched by `substr(public_key, …)` (any type).
+- With **no argument**, the sender's own stored location is used; if it's
+  unknown, the reply is `@[<sender>] can't find your location`.
+- If the prefix matches **more than one** contact, the reply is a
+  newline-delimited disambiguation list — `@[<sender>] N matches:` followed by
+  `<pubkey[:10]> <name[:15]>` per line (capped at 10, with a `…N more` line) —
+  so the sender can retry with a longer prefix.
+- A single match with no stored location replies `@[<sender>] <name> has no
+  location`; an unknown prefix replies `no contact matches '<prefix>'`.
+- 10s per-user cooldown; works in DM and any allowed channel. Like every
+  command it is fail-closed — grant it before others can use it, e.g.
+  `!adm group grant public topo`.
+
 ### `!whoami`
 
 Shows your name, abbreviated pubkey, and group memberships in a single
