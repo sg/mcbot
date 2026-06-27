@@ -1,25 +1,24 @@
 # mcbot
 
 A standalone Python bot for [MeshCore](https://meshcore.io) companion radios.
-Connects over TCP (WiFi) or USB-serial, syncs contacts/channels/messages into a
+Connects over TCP/IP (WiFi) or USB-serial, syncs contacts/channels/messages into a
 local SQLite database, logs all observed RF activity, and responds to incoming
 text commands customized via individual python script/plugins.
 
 Built for MeshCore companion firmware, mcbot handles message delivery via both
 paths the radio firmware offers:
 - the standard queued-message path `MESSAGES_WAITING` followed by `get_msg()`
-- and client-side ECDH/AES decryption from the radio's `RX_LOG_DATA` event stream
-(whichever arrives first wins, duplicates from the other path are deduped)
+- and client-side decryption from the radio's `RX_LOG_DATA` event stream
+(whichever arrives first wins, duplicates from the other path are discarded)
 
 
 ## Features
 
-- TCP (WiFi) or USB-serial connection to a MeshCore radio via the `meshcore_py` library
+- TCP/IP (WiFi) or USB-serial connection to a MeshCore radio via the `meshcore_py` library
 - SQLite-backed persistence: contacts, channels, DMs, channel messages, raw
   packet firehose, user/group/command admin, audit log
-- Client-side decryption of inbound DMs (X25519 ECDH using the radio's
-  exported Ed25519 private key) and channel messages (operator-configured
-  16-byte channel secrets)
+- Client-side decryption of inbound DMs (using the radio's exported Ed25519
+  private key) and channel messages (operator-configured 16-byte channel secrets)
 - Plugin-based command system: drop a Python file into `commands/`,
   hot-reload via `!adm reload`
 - Group-based authorization with system groups `owner`, `admin`, `public`,
@@ -30,11 +29,11 @@ paths the radio firmware offers:
   the commands the caller can run, and `!whoami` showing the caller's
   identity and group memberships
 - Bundled example commands: `!pws` (Weather Underground PWS),
-  `!wx <city> [CC]` (Open-Meteo), `!path` (routing-path diagnostic)
-- Configurable retention caps on stored messages, contacts, and the packet firehose
+  `!wx <city> [CC]` (Open-Meteo), `!path` (routing-path diagnostic), and more
+- Configurable retention caps on stored messages, contacts, and the raw packet firehose
 - INI-based configuration with CLI-flag overrides
-- Detailed log file with per-packet decoded info, command activity,
-  and outbound delivery confirmation
+- Detailed log file with per-packet decoded info, command activity, and outbound
+  delivery confirmation
 - Runtime-editable command config in the `command_config` SQLite table
   (cooldown, dm_only, allowed_channels, etc.) — changes take effect on
   the next invocation, no reload required
@@ -45,11 +44,11 @@ paths the radio firmware offers:
 # Python 3.12+ required
 git clone https://github.com/sg/mcbot.git mcbot
 cd mcbot
-python3 -m venv venv
-source venv/bin/activate
+python3 -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
 
-# Edit mcbot.conf — at minimum set [radio] host/port and [bot] owner_pubkeys.
+# Edit mcbot.conf — at minimum set [radio] host/port or serial-port/baud and [bot] owner_pubkeys.
 # See Bot_Usage.md for the rest.
 
 ./mcbot.py
@@ -59,6 +58,8 @@ From your owner client, DM the bot `!whoami` to confirm access, then
 `!help` to discover the commands available to you (`!help adm` for the
 admin subcommand reference).
 
+Recommended to run mcbot.py in a `screen` or `tmux` session.
+
 See [`Bot_Usage.md`](Bot_Usage.md) for the full architecture, configuration,
 management, and command reference.
 
@@ -66,7 +67,7 @@ management, and command reference.
 
 ```
 mcbot.py                 main bot script
-mcbot.conf               INI config (radio host/port, owners, channels, ...)
+mcbot.conf               INI config (radio host/port|serial device/baud, owners, channels, ...)
 requirements.txt         pip dependencies
 commands/                plugin scripts; one file per command
     adm.py                  administrative subcommands (!adm)
@@ -75,6 +76,7 @@ commands/                plugin scripts; one file per command
     pws.py                  !pws (PWS station observation)
     wx.py                   !wx <city> [CC] (Open-Meteo)
     path.py                 !path (routing path + distance + map link)
+    topo.py                 !topo (geo-locate contact via topographic map link)
     quote.py                !quote (responds with a random 'quote' from a file)
 example-bot-command.py   template for new commands; copy into commands/
 Bot_Usage.md             detailed architecture + admin guide
@@ -85,10 +87,9 @@ logs/mcbot.log           rotating log file (created on first run)
 
 ## Requirements
 
-- Python 3.12+ (uses built-in generic types like `list[str]`)
-- A MeshCore companion radio reachable over TCP (WiFi) or USB-serial
-- Radio firmware v1.14.x or newer recommended — older versions have a
-  different ACK algorithm and outbound delivery confirmation may fail
+- Python 3.12+
+- A MeshCore companion radio reachable over TCP/IP (WiFi) or USB-serial
+- Radio firmware v1.14.x or newer recommended
 - Python dependencies (`requirements.txt`):
   - `meshcore` — the meshcore_py protocol library
   - `pynacl` — X25519 ECDH for client-side DM decryption
