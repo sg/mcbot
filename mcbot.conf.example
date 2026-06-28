@@ -1,4 +1,4 @@
-; mcbot.conf.example — copy to mcbot.conf and fill in your values.
+; mcbot.conf.example -- copy to mcbot.conf and fill in your values.
 ; The real mcbot.conf is gitignored (it holds your owner pubkey, channel
 ; secrets, and radio address). CLI arguments override values here.
 
@@ -14,13 +14,12 @@ port = 5000
 ; --- USB-serial transport ---
 ; Prefer a stable by-id path; ttyUSB0/ttyACM0 numbers can change on replug.
 ; The bot's user must be in the 'dialout' group to open the device.
-; Only one companion connection at a time — serial precludes the WiFi/TCP link.
+; Only one companion connection at a time -- serial precludes the WiFi/TCP link.
 ;serial_port = /dev/serial/by-id/usb-...
 ;serial_baud = 115200
 
 ; Optional device PIN (leave blank if not used)
-device_pin =
-
+;device_pin =
 
 [storage]
 db = ./mcbot.db
@@ -28,7 +27,7 @@ db = ./mcbot.db
 max_channel_messages = 1000
 ; DM retention cap
 max_dms = 1000
-; Contacts retention cap — roll off the oldest (by last_synced_at) past this.
+; Contacts retention cap -- roll off the oldest (by last_synced_at) past this.
 max_contacts = 500
 ; Global cap on the received_packets firehose table
 max_packets = 1000
@@ -63,17 +62,19 @@ log_level = INFO
 commands_dir = ./commands
 ; Set to false to disable command dispatch (sync/log only).
 enabled = true
+
 ; Track repeaters rebroadcasting the bot's OWN sent messages. When a DM or
 ; channel message the bot sent is heard being repeated on RF, each repeat is
 ; logged and shown on the web Packets screen (packet_type REPEAT). If no
 ; repeater is heard within repeat_timeout seconds a NO_REPEAT row is logged +
-; shown — except a DM sent direct to a 0-hop neighbor, which has no repeater in
-; its path and is labelled DIRECT_0HOP (delivered direct, nothing to repeat —
+; shown -- except a DM sent direct to a 0-hop neighbor, which has no repeater in
+; its path and is labelled DIRECT_0HOP (delivered direct, nothing to repeat --
 ; expected, not a failure). NO_REPEAT thus means "sent where a repeater could
 ; have rebroadcast (flood/multi-hop), but none was HEARD in the window," not
 ; that delivery failed. Default: true / 5 seconds.
 ;repeat_tracking = true
 ;repeat_timeout = 5
+
 ; If a CHANNEL message the bot sent gets NO_REPEAT, resend it up to this many
 ; times (0 = off, max 5; default 2). Each retry waits another repeat_timeout, is
 ; shown as a RETRY row, and stops early as soon as a repeater is heard. The
@@ -85,19 +86,21 @@ enabled = true
 ; start, then runtime-managed via '!adm command retry N' or the web
 ; Manage->Commands page (persists across restarts).
 ;channel_retry_max = 2
+
 ; !path collision disambiguation radius, in MILES. When a path-hop hash matches
 ; more than one repeater, a candidate is accepted only if it lies within this
 ; distance of a trusted anchor (the bot's own location, the message sender, or
 ; an unambiguous neighbouring hop). This rejects a far repeater that merely
 ; shares the hash (e.g. one pulled in by tropospheric ducting) while keeping a
-; correctly-located local hop — even when it is the only located candidate.
+; correctly-located local hop -- even when it is the only located candidate.
 ; Applies ONLY to hash collisions; a hop matching a single repeater is always
 ; trusted. Set 0 to disable the bound (collisions then resolve only when >= 2
-; candidates are located). Works whenever the path has at least one anchor — the
+; candidates are located). Works whenever the path has at least one anchor -- the
 ; bot's own location, the message sender, or an unambiguously-located
-; neighbouring hop — so the bot's own location helps but isn't required.
+; neighbouring hop -- so the bot's own location helps but isn't required.
 ; Default: 150.
 ;path_collision_radius_miles = 150
+
 ; Path to the exported radio private key (0600). Default: <db>.privkey
 ;privkey_path = ./mcbot.privkey
 ; Comma-separated full pubkeys bootstrapped into the 'owner' group on every
@@ -109,10 +112,10 @@ owner_pubkeys = 0000000000000000000000000000000000000000000000000000000000000000
 ;dm_flood_after = 2
 ;dm_max_flood_attempts = 2
 
-; Radio contact-table rollover. The radio's contact table (~350 slots) does
-; NOT age out old contacts on its own, so once full it drops new nodes and
-; emits CONTACTS_FULL. When enabled, the bot evicts the stalest contacts FROM
-; THE RADIO to keep radio_evict_headroom free slots — on startup and whenever
+; Radio contact-table rollover. The radio's contact table might not age
+; out old contacts on its own, so once full it drops new nodes and emits
+; CONTACTS_FULL. When enabled, the bot evicts the stalest contacts FROM
+; THE RADIO to keep radio_evict_headroom free slots -- on startup and whenever
 ; CONTACTS_FULL fires. The bot's own sqlite contacts table ([storage]
 ; max_contacts) is the long-term archive and is never deleted by eviction.
 ; Stalest = least-recently-seen (by the bot's own sync clock). Protected from
@@ -121,7 +124,7 @@ owner_pubkeys = 0000000000000000000000000000000000000000000000000000000000000000
 ; table was full is re-added on its NEXT advert. Manual eviction is always
 ; available on the web Manage->Radio page (and policy can be toggled there at
 ; runtime); radio_evict_enabled only governs the AUTOMATIC startup/CONTACTS_FULL
-; triggers. Web policy changes are runtime-only — this file is the startup
+; triggers. Web policy changes are runtime-only -- this file is the startup
 ; source of truth. Default: enabled, 8 free slots.
 ;radio_evict_enabled = true
 ;radio_evict_headroom = 8
@@ -132,16 +135,18 @@ owner_pubkeys = 0000000000000000000000000000000000000000000000000000000000000000
 ;radio_evict_min_interval = 120
 
 ; Periodic flood advert: send a flood advertisement every N hours (0 =
-; disabled). This is only the FIRST-RUN SEED — on first start it is copied
+; disabled). This is only the FIRST-RUN SEED -- on first start it is copied
 ; into the database, after which the DB value is authoritative and managed at
 ; runtime via '!adm advert interval N' or the web Manage->Radio page (changes
 ; persist across restarts). Edit this only to change the initial default.
+; (keep in mind that people won't be able to DM the bot if they haven't
+; received it's contact info via advert)
 ;advert_interval_hours = 0
 
-; Delay (seconds) inserted right before TRANSMITTING each command response —
+; Delay (seconds) inserted right before TRANSMITTING each command response --
 ; after the handler has built its reply (data lookups / web queries are NOT
-; delayed). 0 = disabled; otherwise 0.1–2.0. Useful for testing whether nearby
-; repeaters miss the bot's sends when it replies too quickly. FIRST-RUN SEED
+; delayed). 0 = disabled; otherwise 0.1–2.0. This was put in for testing whether
+; nearby repeaters miss the bot's sends when it replies too quickly. FIRST-RUN SEED
 ; only: copied into the database on first start, then runtime-managed via '!adm
 ; command delay N' or the web Manage->Commands page (persists across restarts).
 ;command_delay = 0
@@ -166,18 +171,24 @@ owner_pubkeys = 0000000000000000000000000000000000000000000000000000000000000000
 ; edit users/groups), so secure it: keep this file out of git, use strong
 ; tokens, and prefer TLS if exposed beyond localhost.
 enabled = false
+
 ; Bind address. 127.0.0.1 = local only; 0.0.0.0 = reachable on the LAN.
 host = 0.0.0.0
 port = 8080
+
 ; Bearer tokens for apps/scripts (Authorization: Bearer <token>). Comma list.
 ;api_tokens = changeme-long-random-token
+
 ; Browser login. Hash with: ./mcbot.py --hash-password (or tools/hash_password).
 ;admin_user = admin
 ;admin_password_hash = pbkdf2_sha256$...
-; Secret used to sign session tokens — set to a long random string.
+
+; Secret used to sign session tokens -- set to a long random string.
 ;session_secret =
+
 ; CORS: comma list of allowed origins, or "*". Tighten once the UI origin is known.
 ;cors_origins = *
+
 ; Optional built-in TLS (serve https:// directly without a reverse proxy).
 ;tls_cert = ./web.crt
 ;tls_key  = ./web.key
@@ -191,7 +202,7 @@ port = 8080
 ;
 ; ONE-TIME SEED: this section is consumed only on first run, when the
 ; channels DB table is empty. After that the channels table is the
-; authority — add/remove channels at runtime with '!adm channel
+; authority -- add/remove channels at runtime with '!adm channel
 ; add/remove/list'; edits to this section are then ignored.
 ;
 ; Format: <channel_idx> = <name>[:<secret_hex>]
