@@ -1,4 +1,4 @@
-# mcbot — Usage and Architecture
+# mcbot : Usage and Architecture
 
 This is the detailed guide. See [`README.md`](README.md) for a high-level
 overview.
@@ -20,11 +20,12 @@ overview.
 
 ## 1. Architecture Overview
 
-mcbot is a single-file Python `asyncio` application built on top of the
-`meshcore` (a.k.a. `meshcore_py`) library. The high-level data flow:
+mcbot is a Python `asyncio` application built on top of the `meshcore_py` library
+([github.com/meshcore-dev/meshcore_py](https://github.com/meshcore-dev/meshcore_py)).
+The high-level data flow:
 
 ```
-radio link — TCP (WiFi) or USB-serial
+radio link -- TCP/IP (WiFi) or USB-serial
     ↓
 meshcore_py event dispatcher
     ↓
@@ -48,15 +49,14 @@ str | list[str] | None  →  send_reply  →  send_msg_with_retry
 
 ### Why two ingest paths?
 
-MeshCore companion firmware (including the WiFi-patched variant this
-bot was developed against) exposes inbound messages two ways
+MeshCore companion firmware exposes inbound messages two ways
 simultaneously:
 
-- **`CONTACT_MSG_RECV` / `CHANNEL_MSG_RECV` path** — the radio queues
+- **`CONTACT_MSG_RECV` / `CHANNEL_MSG_RECV` path** -- the radio queues
   decoded inbound messages and signals `MESSAGES_WAITING`. The lib's
   auto-fetcher (`start_auto_message_fetching`) calls `get_msg()` in
   response, and the already-decrypted message arrives as an event.
-- **`RX_LOG_DATA` decrypt path** — the radio also passes through raw
+- **`RX_LOG_DATA` decrypt path** -- the radio also passes through raw
   RF observations (the on-air encrypted packet) as a separate event.
   mcbot parses the envelope and runs X25519 ECDH (DMs) or
   HMAC-checked AES (channels) locally using known keys.
@@ -64,15 +64,15 @@ simultaneously:
 Because mcbot programs every configured channel secret into the radio's
 slots (`_program_channels_on_radio` via `set_channel`), the radio decrypts
 **both** DMs and channel messages itself and delivers them via the queued
-path — so on this firmware the same logical message arrives via *both*
-paths. The ingest funnel dedupes: DMs by `(sender_pubkey,
-sender_timestamp)`, channel messages by `(channel_idx, sender_timestamp,
-text)`. Whichever path arrives first stores and dispatches; the other is
-silently suppressed. Sender-side retries (which bump the attempt counter
-and change the ciphertext / pkt_hash) are caught by the same keys.
+path -- so the same logical message arrives via *both* paths. The ingest
+funnel dedupes: DMs by `(sender_pubkey, sender_timestamp)`, channel messages
+by `(channel_idx, sender_timestamp, text)`. Whichever path arrives first
+stores and dispatches; the other is silently suppressed. Sender-side retries
+(which bump the attempt counter and change the ciphertext / pkt_hash) are
+caught by the same keys.
 
 `GET_CHANNEL` returns empty for all slots on this firmware, so the radio
-won't *report* its channel secrets back — but that only means mcbot can't
+won't *report* its channel secrets back -- but that only means mcbot can't
 auto-discover them, not that it can't receive channel messages. Channel
 keys are operator-managed via `mcbot.conf [channels]` (first-run seed) and
 `!adm channel add/remove` (runtime), and pushed into the radio from there.
@@ -87,7 +87,7 @@ into the radio (e.g. beyond its slot capacity).
 
 ### Client-side decryption
 
-**DMs** — On first launch, mcbot calls `mc.commands.export_private_key()`
+**DMs** -- On first launch, mcbot calls `mc.commands.export_private_key()`
 to retrieve the radio's 64-byte Ed25519 private key, then writes it to
 `mcbot.privkey` (mode 0600). Subsequent runs load it from disk. Each
 inbound DM RF packet is matched against contacts by the 1-byte sender
@@ -95,7 +95,7 @@ hash; for each candidate the bot derives the X25519 ECDH shared secret
 and attempts AES-128-ECB decryption with HMAC verification. Only the
 sender whose pubkey actually matches will MAC-verify successfully.
 
-**Channel messages** — The operator configures channel secrets in
+**Channel messages** -- The operator configures channel secrets in
 `mcbot.conf [channels]` or at runtime via `!adm channel add`. On each
 inbound channel RF packet, the 1-byte channel hash is matched against
 the configured secret table, then HMAC + AES decryption confirms the
@@ -110,10 +110,10 @@ Each command is a separate Python file in `commands/`. At startup
 
 On first load each command's script-level defaults are seeded into the
 `command_config` SQLite table. After that, the dispatcher reads
-`command_config` fresh on every invocation — operator edits in the
+`command_config` fresh on every invocation -- operator edits in the
 DB take effect immediately, no reload required.
 
-`!adm reload` re-scans the directory and re-imports — pulls in newly
+`!adm reload` re-scans the directory and re-imports -- pulls in newly
 created or edited plugin files without restarting the bot.
 
 ### Database
@@ -129,7 +129,7 @@ async tasks serialize cleanly. See §7 for the schema.
 ### Prerequisites
 
 - Python 3.12+
-- A MeshCore companion radio, reachable either over TCP (WiFi) at a
+- A MeshCore companion radio, reachable either over TCP/IP (WiFi) at a
   host:port or over USB-serial at a device path
 - Your owner client/radio's full 64-hex public key
 
@@ -138,8 +138,8 @@ async tasks serialize cleanly. See §7 for the schema.
 ```bash
 git clone <your-source>  mcbot
 cd mcbot
-python3 -m venv venv
-source venv/bin/activate
+python3 -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
@@ -148,7 +148,7 @@ pip install -r requirements.txt
 Open `mcbot.conf` and set the radio connection plus your owner key. Pick
 **one** transport.
 
-Over **TCP (WiFi)** — the default:
+Over **TCP/IP (WiFi)** -- the default:
 
 ```ini
 [radio]
@@ -160,7 +160,7 @@ port = 5000
 owner_pubkeys = <your 64-hex pubkey from your owner client>
 ```
 
-…or over **USB-serial** — set `transport = serial` and a device path
+…or over **USB-serial** -- set `transport = serial` and a device path
 (no host/port needed):
 
 ```ini
@@ -173,7 +173,7 @@ serial_baud = 115200
 owner_pubkeys = <your 64-hex pubkey from your owner client>
 ```
 
-Serial is a single exclusive link — you can't also use TCP (WiFi) to the
+Serial is a single exclusive link -- you can't also use TCP/IP (WiFi) to the
 same radio at the same time. `pyserial` ships as a dependency of
 `meshcore`, so no extra install is needed. See §3 `[radio]` for the full
 option list and the USB-serial device-path / `dialout` permission notes.
@@ -188,7 +188,7 @@ Optionally add channels:
 3 = MyPrivateChan:a5e907b6ce4030df22a6b2df54f79ce4
 ```
 
-After first run, channel state is stored in the `channels` DB table —
+After first run, channel state is stored in the `channels` DB table --
 the `[channels]` section is consulted only when the table is empty.
 
 ### First launch
@@ -258,11 +258,11 @@ CLI: `--transport {tcp,serial}`, `--host`, `--port`, `--serial-port`, `--serial-
 **USB-serial notes**:
 - Heltec V3 (ESP32-S3) usually enumerates as `/dev/ttyACM0` or `/dev/ttyUSB0`
   depending on its USB-serial chip. Those numbers can change across
-  reboot/replug — prefer the stable `/dev/serial/by-id/usb-...` symlink.
+  reboot/replug -- prefer the stable `/dev/serial/by-id/usb-...` symlink.
 - The bot's user might need to be in the `dialout` group (Linux) to open `/dev/tty*`,
   to prevent getting a permission error.
 - MeshCore companion serial runs at 115200 baud.
-- Serial is a single exclusive connection — you can't run TCP (WiFi) and
+- Serial is a single exclusive connection -- you can't run TCP/IP (WiFi) and
   serial to the same radio at once. Choosing serial means the WiFi-companion
   link isn't used.
 
@@ -286,13 +286,13 @@ CLI: `--db`, `--max-channel-messages`, `--max-dms`, `--max-contacts`, `--max-pac
 
 CLI: `--log-channels`
 
-This filter controls **storage only** — it does NOT gate command dispatch.
+This filter controls **storage only** -- it does NOT gate command dispatch.
 A channel that the bot can decrypt (it has a key in `[channels]` / the
 channels table) will dispatch commands per each command's `allowed_channels`,
 even if the channel isn't in `[channel_logging] channels`. Use
-`[channel_logging]` to limit which channels' chatter fills `channel_messages`;
-use a command's `allowed_channels` (via `!adm command channel add/remove`) to
-control where that command responds.
+`[channel_logging]` to limit which channels' chatter fills the `channel_messages`
+table; use a command's `allowed_channels` (via `!adm command channel add/remove`)
+to control where that command responds.
 
 ### `[logging]`
 
@@ -327,10 +327,10 @@ CLI: `--commands-dir`, `--privkey-path`, `--disable-commands`,
 ```
 
 - `<idx>` is the radio's channel slot (0..39)
-- For `#`-prefixed names, omit the key — it's auto-derived as `SHA256(name)[:16]`
+- For `#`-prefixed names, omit the key -- it's auto-derived as `SHA256(name)[:16]`
 - For non-`#` names, supply the 16-byte (32 hex char) key after `:`
 - Used only as a first-run seed; after that the `channels` table is
-  authoritative (manage via `!adm channel add/remove`)
+  authoritative (manage via `!adm channel add/remove` or via the web UI)
 
 To re-seed from conf: `sqlite3 mcbot.db "DELETE FROM channels;"` then
 restart.
@@ -357,8 +357,8 @@ After=network.target
 [Service]
 Type=simple
 User=steve
-WorkingDirectory=/home/steve/dev/meshcore/meshcore-bot
-ExecStart=/home/steve/dev/meshcore/meshcore-bot/venv/bin/python mcbot.py
+WorkingDirectory=/home/steve/mcbot
+ExecStart=/home/steve/mcbot/.venv/bin/python mcbot.py
 Restart=on-failure
 RestartSec=10
 
@@ -372,7 +372,7 @@ WantedBy=multi-user.target
 |--------------|--------------|
 | `commands/*.py` (new or edited plugin) | DM `!adm reload` |
 | `mcbot.conf` | DM `!adm restart` (re-reads conf, re-opens DB, reconnects) |
-| `command_config` table edit | Nothing — read fresh on each dispatch |
+| `command_config` table edit | Nothing -- read fresh on each dispatch |
 | `mcbot.py` itself | Kill process, restart from shell |
 | Radio firmware upgrade | Kill process (radio reboots), restart |
 
@@ -410,7 +410,7 @@ UPDATE command_config SET allowed_channels='["#bot","#testing"]' WHERE command='
 - Empty JSON array `[]` → "no restriction" (override script)
 - Non-empty JSON array `["#bot",...]` → restriction list
 
-Note: **authorization is not in `command_config`** — who may run a
+Note: **authorization is not in `command_config`** -- who may run a
 command is controlled by group grants (`!adm group grant/revoke`, see §6),
 not by an edit here.
 
@@ -460,7 +460,7 @@ See §9 for full syntax. Common flow:
 
 ### Log file
 
-`logs/mcbot.log` — 10 MB rotating × 5 backups. Useful patterns:
+`logs/mcbot.log` -- 10 MB rotating × 5 backups. Useful patterns:
 
 ```bash
 tail -f logs/mcbot.log
@@ -495,10 +495,10 @@ sqlite3 mcbot.db
 
 Authorization is **groups-only and fail-closed**: a command runs only if
 it has been granted to a group the caller belongs to. There is no
-per-command "skip auth" flag — the command name *is* the permission.
+per-command "skip auth" flag -- the command name *is* the permission.
 
 A sender is authorized for command `X` if **either** of:
-1. An **all-users** group (the `*` member — everyone belongs) grants `X`
+1. An **all-users** group (the `*` member -- everyone belongs) grants `X`
    or `*`. This is how a command is made **open to everyone**: grant it to
    `public`, which is an all-users group by default. It also works for
    senders whose pubkey couldn't be resolved, e.g. some channel messages.
@@ -506,7 +506,7 @@ A sender is authorized for command `X` if **either** of:
    list contains `X` or `*`. Owners hold `*`, so they can run anything.
 
 If neither holds, the command is **denied** (fail-closed). A freshly
-added command is therefore runnable only by owners until you grant it —
+added command is therefore runnable only by owners until you grant it --
 see "Making a command available" below.
 
 The **block check** runs first: anyone in the `blocked` group is silently
@@ -534,7 +534,7 @@ made all-users (a block is always explicit). The web UI Groups tab has an
 |-------|-------------|-----------|------------|
 | `owner` | `*` grant | Add/remove members + grants | No (system) |
 | `admin` | (empty) | Yes | No (system) |
-| `public` | all-users (`*` member) | Yes — grant commands to make them open to all | No (system) |
+| `public` | all-users (`*` member) | Yes -- grant commands to make them open to all | No (system) |
 | `blocked` | (empty) | Add/remove via `!adm user block/unblock` | No (system) |
 | `user` | (empty) | Yes | Yes |
 
@@ -549,7 +549,7 @@ long as your pubkey is in conf, you have owner access after restart.
 
 The dispatcher always calls `is_authorized_for_command(pubkey, NAME)`
 before invoking `handle()`, and denies silently if it returns False. A
-command is gated purely by which groups have been granted it — there is
+command is gated purely by which groups have been granted it -- there is
 no per-command auth flag.
 
 ### Making a command available
@@ -563,7 +563,7 @@ Grant the command to a group (via `!adm` or the web UI's Groups tab):
 ```
 
 Owners (the `owner` group, holding `*`) can always run every command, so
-admin-only commands need no explicit grant — just don't grant them to
+admin-only commands need no explicit grant -- just don't grant them to
 anyone else.
 
 ### Admin commands
@@ -580,7 +580,7 @@ A separate plugin-level flag. When `True`, channel invocations are
 silently dropped even if `allowed_channels` would otherwise permit them.
 Recommended for any command whose authorization decision matters,
 because channel-message sender names are *not* cryptographically
-authenticated — anyone with the channel key can claim any sender name in
+authenticated -- anyone with the channel key can claim any sender name in
 the plaintext prefix. Only DMs bind identity to a private key via ECDH.
 
 ---
@@ -706,7 +706,7 @@ async def handle(ctx):
     return f"Hello {ctx.sender_name or 'there'}"
 ```
 
-Drop in `commands/hello.py`, DM `!adm reload`, then grant it — a new
+Drop in `commands/hello.py`, DM `!adm reload`, then grant it -- a new
 command is owner-only until granted (fail-closed). To use it as an owner,
 just DM `!hello`; to open it to everyone, DM `!adm group grant public
 hello` first.
@@ -724,9 +724,9 @@ hello` first.
 | `DM_ONLY` | bool | False | Channel invocations silently dropped |
 
 These are seeded into `command_config` on first load. After that, the DB
-row is the runtime authority — script-level values are fallbacks when the
+row is the runtime authority -- script-level values are fallbacks when the
 corresponding DB column is NULL. (`NAME`/`TRIGGERS` are not
-runtime-editable.) Note that **authorization is not a module attribute** —
+runtime-editable.) Note that **authorization is not a module attribute** --
 it lives entirely in group grants (see §6).
 
 #### Optional `!help` integration
@@ -740,7 +740,7 @@ These are read by the `!help` command only; they are *not* stored in
 | `HELP_DETAIL` | list[str] | Multi-line detail shown by `!help <cmd>`; falls back to `DESCRIPTION` when absent |
 
 `!help` lists a command when it is enabled and the caller would pass its
-authorization gate — i.e. the caller could actually run it (the same
+authorization gate -- i.e. the caller could actually run it (the same
 groups-only check the dispatcher uses, keyed on the command name).
 Commands granted to `public` show to everyone; everything else shows only
 to callers in a group that grants it. `!help <cmd>` for a command the
@@ -809,17 +809,17 @@ Returns the current observation from one Weather Underground PWS station
 via the weather.com API. You configure two things (see the top of
 `commands/pws.py`):
 
-- **Station ID** — set `PWS_STATION_ID` in the environment, or edit
+- **Station ID** -- set `PWS_STATION_ID` in the environment, or edit
   `_STATION_ID` in `commands/pws.py`.
-- **API key** — a weather.com API key: set `PWS_API_KEY` in the
+- **API key** -- a weather.com API key: set `PWS_API_KEY` in the
   environment, or edit `_API_KEY` in `commands/pws.py`. Prefer the env var
-  — `pws.py` is tracked in git, so a key written into `_API_KEY` would be
+  -- `pws.py` is tracked in git, so a key written into `_API_KEY` would be
   committed.
 
 Until both are set, the command replies with a short "not configured"
 hint instead of weather.
 
-Reply (typical — the prefix is your configured station ID):
+Reply (typical -- the prefix is your configured station ID):
 ```
 [KXXYYYY1234] Temp: 82F, Humidity: 65%, Rain: 0.0, Wind: SSE 5mph
 ```
@@ -856,11 +856,11 @@ Austin [US] (30.2672,-97.7431): 82F, Humid: 65%, Rain: 0.0in, Wind: SSE 5mph
 ### `!path` / `!path k` / `!path <hops>`
 
 Reports the routing path your message took to reach the bot, the routed and
-direct distance over the located hops, and a link to a map of the route — all
+direct distance over the located hops, and a link to a map of the route -- all
 in one reply. Arguments:
 
-- `k` — kilometers (default is miles).
-- An explicit path string (comma-separated hex hops) — reports on that path
+- `k` -- kilometers (default is miles).
+- An explicit path string (comma-separated hex hops) -- reports on that path
   instead of your message's path. Hops must be uniform 1/2/3-byte hex
   (e.g. `d690,abcd,4f3d`).
 
@@ -892,13 +892,13 @@ in one reply. Arguments:
   resolve only against repeater/room contacts. A hop matching a single repeater
   is always trusted. When a hash matches more than one repeater, the hop is
   placed only if the nearest located candidate lies within
-  `[bot] path_collision_radius_miles` (default 150) of a known anchor — the
-  bot's own location, the sender, or an unambiguous neighbouring hop —
+  `[bot] path_collision_radius_miles` (default 150) of a known anchor -- the
+  bot's own location, the sender, or an unambiguous neighbouring hop --
   otherwise it is left unlocated rather than risk a far repeater that merely
   shares the hash (e.g. one pulled in by tropospheric ducting). Set the radius
   to `0` to disable that bound (collisions then resolve only when ≥2 candidates
-  are located). Any one anchor enables this — the bot's own location, the
-  sender, or an unambiguously-located neighbouring hop — so setting the bot's
+  are located). Any one anchor enables this -- the bot's own location, the
+  sender, or an unambiguously-located neighbouring hop -- so setting the bot's
   own location on the radio helps but isn't required.
 
 - 10s per-user cooldown; no auth; works in DM and any allowed channel.
@@ -920,13 +920,13 @@ and replies with a da.gd-shortened marker link (zoom 16).
 - With **no argument**, the sender's own stored location is used; if it's
   unknown, the reply is `@[<sender>] can't find your location`.
 - If the prefix matches **more than one** contact, the reply is a
-  newline-delimited disambiguation list — `@[<sender>] N matches:` followed by
-  `<pubkey[:10]> <name[:15]>` per line (capped at 10, with a `…N more` line) —
+  newline-delimited disambiguation list -- `@[<sender>] N matches:` followed by
+  `<pubkey[:10]> <name[:15]>` per line (capped at 10, with a `…N more` line) --
   so the sender can retry with a longer prefix.
 - A single match with no stored location replies `@[<sender>] <name> has no
   location`; an unknown prefix replies `no contact matches '<prefix>'`.
 - 10s per-user cooldown; works in DM and any allowed channel. Like every
-  command it is fail-closed — grant it before others can use it, e.g.
+  command it is fail-closed -- grant it before others can use it, e.g.
   `!adm group grant public topo`.
 
 ### `!whoami`
@@ -949,9 +949,9 @@ sender prefix; only the DM form cryptographically binds the name to a key.
 ### `!help` / `!help <cmd>`
 
 Hybrid command. On the allowed channels it only replies with 
-`Send !help to me in a DM.` — so the full multi-line listing never
+`Send !help to me in a DM.` -- so the full multi-line listing never
 spams a channel. Sent as a DM it lists the commands the caller can actually
-run — truly public commands plus anything the caller's group memberships
+run -- truly public commands plus anything the caller's group memberships
 grant. `!help <cmd>` (in DM) shows detail for one command (e.g. `!help adm`
 renders the admin subcommand reference, but only for callers holding the
 `adm` permission).
@@ -959,11 +959,11 @@ renders the admin subcommand reference, but only for callers holding the
 ```
 !help (channel) → Send !help to me in a DM.
 !help (DM)      → Commands you can run:
-                    !help — ...
-                    !path — ...
-                    !pws — ...
-                    !whoami — ...
-                    !wx — ...
+                    !help -- ...
+                    !path -- ...
+                    !pws -- ...
+                    !whoami -- ...
+                    !wx -- ...
                   Use '!help <cmd>' for detail.
 !help adm (DM)  → (owner/admin only) the !adm subcommand table
 ```
@@ -971,7 +971,7 @@ renders the admin subcommand reference, but only for callers holding the
 Commands set `HELP_HIDDEN` / `HELP_DETAIL` to tune how they appear here
 (see §8).
 
-### `!adm` — administrative commands
+### `!adm` -- administrative commands
 
 DM-only (`DM_ONLY=True`). Every subcommand requires the `adm` permission
 (held by the `owner` group via `*`). The command listing and identity
@@ -1067,7 +1067,7 @@ name, first 6 hex chars of pubkey, and ISO-format `last_advert` time.
 ```
 
 `!adm command delay` inserts a fixed pause right before each command response
-is transmitted — *after* the handler has finished its lookups/web queries, so
+is transmitted -- *after* the handler has finished its lookups/web queries, so
 only the radio TX is held back. It exists to test whether nearby repeaters miss
 the bot's sends when it replies too quickly. The value is seeded from
 `[bot] command_delay` in `mcbot.conf` on first run, then DB-authoritative and
@@ -1076,7 +1076,7 @@ restarts).
 
 `!adm command retry` controls how many times a **channel** message the bot sent
 is resent when no repeater rebroadcast is heard within `repeat_timeout`. The
-resend reuses the original message timestamp so it is byte-identical — MeshCore
+resend reuses the original message timestamp so it is byte-identical -- MeshCore
 keys a channel message by `SHA256(timestamp‖text)`, so nodes that already heard
 it de-dupe it and only repeaters that missed it pick it up (no duplicates). It
 stops early as soon as a repeat is heard, and each attempt shows as a `RETRY`
@@ -1087,7 +1087,7 @@ excluded (they have ACK-driven retry). Seeded from `[bot] channel_retry_max`
 
 `!adm command channel add/remove` edits `command_config.allowed_channels`
 (a JSON array). Because the dispatcher reads that column fresh on every
-invocation, changes take effect immediately — no reload. Note the
+invocation, changes take effect immediately -- no reload. Note the
 allowlist semantics: a command with no listed channels responds on any
 channel the bot can decrypt; adding the first channel restricts it to only
 the listed channels.
@@ -1102,7 +1102,7 @@ the listed channels.
 IMPORTANT: a radio's path-hash width only governs the encoding of packets
 **that radio originates**. The width of a *received* packet's path is set
 by whoever sent it, so changing this does **not** improve `!path dist`
-accuracy on inbound messages — those are mostly 1-byte because most
+accuracy on inbound messages -- those are mostly 1-byte because most
 senders on the network are on mode 0. This setting only matters if
 something downstream analyzes paths of messages the bot sends.
 
@@ -1123,7 +1123,7 @@ something downstream analyzes paths of messages the bot sends.
 !adm restart            in-process restart: tears down radio + DB, then
                         rebuilds from a fresh config read. Acknowledgment
                         is sent before the disconnect (5s delay). Does NOT
-                        pick up changes to mcbot.py itself — that needs a
+                        pick up changes to mcbot.py itself -- that needs a
                         process restart.
 ```
 
@@ -1182,15 +1182,15 @@ Then run the bot. Look for `web admin UI/API on http://… (docs at /api/docs)`.
 
 ### UI sections
 
-- **Messages** — channel list + live message stream + searchable contacts
+- **Messages** -- channel list + live message stream + searchable contacts
   pane. Pick a channel (or click a contact to open a DM thread) and use the
   compose box to send a manually-crafted message. Outgoing messages are
   recorded with an `is_outgoing` flag and echoed back over the live feed.
-- **Packets** — live raw-packet table; select a packet to see its hex dump
+- **Packets** -- live raw-packet table; select a packet to see its hex dump
   with a field-by-field breakout. Hovering a field highlights its bytes and
   vice-versa; `RX_LOG_DATA` packets are decoded down to the decrypted
   channel/DM text when keys are available.
-- **Manage** — view and **edit** the tracked DB tables: add/remove channels,
+- **Manage** -- view and **edit** the tracked DB tables: add/remove channels,
   manage user group membership (add/remove/rename/block/delete), create and
   delete groups and grant/revoke their commands (grant a command to the
   `public` group to make it open to everyone), and toggle per-command
@@ -1199,7 +1199,7 @@ Then run the bot. Look for `web admin UI/API on http://… (docs at /api/docs)`.
 
 ### Shared mutation service
 
-Every state change — whether it comes from `!adm` or the web API — runs
+Every state change -- whether it comes from `!adm` or the web API -- runs
 through `management.py` (`Management`, reachable as `bot.mgmt`). It owns the
 invariants (e.g. "refuse to remove the last owner", "system groups can't be
 deleted", channel-key validation) and writes the `bot_audit_log` row, so the
