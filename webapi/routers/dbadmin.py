@@ -570,3 +570,55 @@ async def set_command_retry(
         )
     except MgmtError as e:
         raise http_for_mgmt(e)
+
+
+# --- Database console (web Database tab): raw SQL + saved queries ---------
+class SqlBody(BaseModel):
+    sql: str
+
+
+@router.post("/db/query")
+async def db_query(
+    body: SqlBody,
+    bot=Depends(get_bot), identity: str = Depends(require_auth),
+):
+    try:
+        return await bot.mgmt.run_sql(body.sql, **actor_kwargs(identity))
+    except MgmtError as e:
+        raise http_for_mgmt(e)
+
+
+@router.get("/db/saved-queries")
+async def db_saved_queries(
+    bot=Depends(get_bot), identity: str = Depends(require_auth),
+):
+    return {"items": await bot.mgmt.saved_query_list(**actor_kwargs(identity))}
+
+
+class SavedQueryBody(BaseModel):
+    name: str
+    query: str
+
+
+@router.post("/db/saved-queries")
+async def db_save_query(
+    body: SavedQueryBody,
+    bot=Depends(get_bot), identity: str = Depends(require_auth),
+):
+    try:
+        return await bot.mgmt.saved_query_save(
+            body.name, body.query, **actor_kwargs(identity),
+        )
+    except MgmtError as e:
+        raise http_for_mgmt(e)
+
+
+@router.delete("/db/saved-queries/{query_id}")
+async def db_delete_query(
+    query_id: int,
+    bot=Depends(get_bot), identity: str = Depends(require_auth),
+):
+    try:
+        return await bot.mgmt.saved_query_delete(query_id, **actor_kwargs(identity))
+    except MgmtError as e:
+        raise http_for_mgmt(e)

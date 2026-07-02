@@ -965,6 +965,15 @@ CREATE TABLE IF NOT EXISTS bot_meta (
     value TEXT
 );
 
+-- Named SQL snippets saved from the web Database console.
+CREATE TABLE IF NOT EXISTS saved_queries (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT UNIQUE NOT NULL,
+    query TEXT NOT NULL,
+    created_at INTEGER,
+    updated_at INTEGER
+);
+
 CREATE TABLE IF NOT EXISTS bot_groups (
     name TEXT PRIMARY KEY,
     description TEXT,
@@ -1061,6 +1070,27 @@ class DB:
     async def fetchall(self, sql: str, params: tuple = ()):
         async with self.lock:
             return self.conn.execute(sql, params).fetchall()
+
+    async def run_raw(self, sql: str) -> dict:
+        """Execute one arbitrary SQL statement for the web Database console.
+        sqlite3 permits only a single statement per call, which conveniently
+        blocks ';'-chained injection. Returns column names + rows for a result
+        set (BLOBs hex-encoded so the payload is JSON-safe), else the affected
+        rowcount (-1 for statements like DDL that report none)."""
+        async with self.lock:
+            cur = self.conn.execute(sql)
+            if cur.description is not None:
+                columns = [d[0] for d in cur.description]
+                rows = [
+                    [v.hex() if isinstance(v, (bytes, bytearray)) else v
+                     for v in r]
+                    for r in cur.fetchall()
+                ]
+                self.conn.commit()
+                return {"columns": columns, "rows": rows, "rowcount": len(rows)}
+            rowcount = cur.rowcount
+            self.conn.commit()
+            return {"columns": [], "rows": [], "rowcount": rowcount}
 
     def close(self):
         try:
