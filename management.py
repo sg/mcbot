@@ -555,6 +555,67 @@ class Management:
         return {"retries": self.bot.channel_retry_max}
 
     # ==================================================================
+    # SQL console (web Database tab) + saved queries
+    # ==================================================================
+    async def run_sql(self, sql, *, actor_pubkey=None, actor_name=None) -> dict:
+        """Execute one arbitrary SQL statement from the web console. Every
+        statement is audited as 'db.sql' (its text truncated). The sqlite error
+        message is surfaced verbatim on failure. Callers must be authorized —
+        this is unrestricted read/write access to the live database."""
+        sql = (sql or "").strip()
+        if not sql:
+            raise MgmtError("empty query", "invalid")
+        try:
+            result = await self.bot.db.run_raw(sql)
+        except Exception as e:
+            raise MgmtError(str(e), "invalid")
+        await self._audit(
+            actor_pubkey, actor_name, "db.sql", None,
+            sql[:200] + ("…" if len(sql) > 200 else ""),
+        )
+        return result
+
+    async def saved_query_list(self, *, actor_pubkey=None, actor_name=None) -> list:
+        rows = await self.db.fetchall(
+            "SELECT id, name, query, updated_at FROM saved_queries ORDER BY name"
+        )
+        return [dict(r) for r in rows]
+
+    async def saved_query_save(
+        self, name, query, *, actor_pubkey=None, actor_name=None,
+    ) -> dict:
+        """Create or overwrite (by name) a saved query. Audited."""
+        name = (name or "").strip()
+        query = (query or "").strip()
+        if not name:
+            raise MgmtError("a name is required", "invalid")
+        if not query:
+            raise MgmtError("the query is empty", "invalid")
+        now = int(time.time())
+        await self.db.execute(
+            "INSERT INTO saved_queries(name, query, created_at, updated_at) "
+            "VALUES(?,?,?,?) ON CONFLICT(name) DO UPDATE SET "
+            "query=excluded.query, updated_at=excluded.updated_at",
+            (name, query, now, now),
+        )
+        await self._audit(actor_pubkey, actor_name, "db.query.save", name, None)
+        return {"name": name}
+
+    async def saved_query_delete(
+        self, query_id, *, actor_pubkey=None, actor_name=None,
+    ) -> dict:
+        row = await self.db.fetchone(
+            "SELECT name FROM saved_queries WHERE id=?", (query_id,)
+        )
+        if not row:
+            raise MgmtError("saved query not found", "not_found")
+        await self.db.execute("DELETE FROM saved_queries WHERE id=?", (query_id,))
+        await self._audit(
+            actor_pubkey, actor_name, "db.query.delete", row["name"], None
+        )
+        return {"deleted": query_id}
+
+    # ==================================================================
     # Outbound messages
     # ==================================================================
     async def send_channel(
