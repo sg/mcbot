@@ -9,7 +9,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 
-from management import Management, MgmtError
+from management import RADIO_PRESETS, Management, MgmtError
 from ..util import (
     actor_kwargs, get_bot, http_for_mgmt, require_auth,
     rows_to_list, row_to_dict,
@@ -620,5 +620,69 @@ async def db_delete_query(
 ):
     try:
         return await bot.mgmt.saved_query_delete(query_id, **actor_kwargs(identity))
+    except MgmtError as e:
+        raise http_for_mgmt(e)
+
+
+# --- Radio configuration (web Radio tab: Identity + Radio Settings) -------
+@router.get("/radio/presets")
+async def radio_presets(identity: str = Depends(require_auth)):
+    return {"items": [{"name": k, **v} for k, v in RADIO_PRESETS.items()]}
+
+
+class RadioIdentityBody(BaseModel):
+    name: str | None = None
+    private_key: str | None = None
+    reboot: bool = False
+
+
+@router.post("/radio/identity")
+async def radio_identity(
+    body: RadioIdentityBody,
+    bot=Depends(get_bot), identity: str = Depends(require_auth),
+):
+    try:
+        return await bot.mgmt.radio_apply_identity(
+            name=body.name, private_key=body.private_key, reboot=body.reboot,
+            **actor_kwargs(identity),
+        )
+    except MgmtError as e:
+        raise http_for_mgmt(e)
+
+
+class RadioSettingsBody(BaseModel):
+    freq: float | None = None
+    bw: float | None = None
+    sf: int | None = None
+    cr: int | None = None
+    tx_power: int | None = None
+    lat: float | None = None
+    lon: float | None = None
+    adv_loc_policy: bool | None = None
+    reboot: bool = False
+
+
+@router.post("/radio/settings")
+async def radio_settings(
+    body: RadioSettingsBody,
+    bot=Depends(get_bot), identity: str = Depends(require_auth),
+):
+    try:
+        return await bot.mgmt.radio_apply_settings(
+            freq=body.freq, bw=body.bw, sf=body.sf, cr=body.cr,
+            tx_power=body.tx_power, lat=body.lat, lon=body.lon,
+            adv_loc_policy=body.adv_loc_policy, reboot=body.reboot,
+            **actor_kwargs(identity),
+        )
+    except MgmtError as e:
+        raise http_for_mgmt(e)
+
+
+@router.post("/radio/reboot")
+async def radio_reboot(
+    bot=Depends(get_bot), identity: str = Depends(require_auth),
+):
+    try:
+        return await bot.mgmt.radio_reboot(**actor_kwargs(identity))
     except MgmtError as e:
         raise http_for_mgmt(e)

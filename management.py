@@ -46,6 +46,31 @@ def _actor(actor_pubkey: Optional[str]) -> Optional[str]:
     return (actor_pubkey or "").lower() or None
 
 
+# Convenience region presets for the radio config (web dropdown + '!adm radio
+# preset'). Values just FILL the editable fields; the operator reviews before
+# applying. US/Canada and EU868 match MeshCore's documented defaults; 433 and
+# ANZ are common community values — verify for your area before applying.
+RADIO_PRESETS = {
+    "US/Canada (915)": {"freq": 910.525, "bw": 62.5, "sf": 7, "cr": 5},
+    "EU (868)":        {"freq": 869.618, "bw": 62.5, "sf": 8, "cr": 5},
+    "EU/Asia (433)":   {"freq": 433.5,   "bw": 62.5, "sf": 8, "cr": 5},
+    "ANZ (915/919)":   {"freq": 915.8,   "bw": 62.5, "sf": 7, "cr": 5},
+}
+
+
+def _radio_ok(ev, what: str):
+    """Raise MgmtError if a radio command returned ERROR; else pass it through."""
+    t = getattr(getattr(ev, "type", None), "name", "") if ev else ""
+    if t == "ERROR":
+        p = ev.payload if isinstance(ev.payload, dict) else {}
+        reason = (
+            p.get("reason") or p.get("code_string")
+            or p.get("error_code") or "rejected"
+        )
+        raise MgmtError(f"radio rejected {what}: {reason}", "conflict")
+    return ev
+
+
 class Management:
     def __init__(self, bot):
         self.bot = bot
@@ -834,6 +859,129 @@ class Management:
             f"enabled={self.bot.evict_enabled} headroom={self.bot.evict_headroom}",
         )
         return self._evict_policy()
+
+    # ==================================================================
+    # Radio configuration (name, radio params, location, identity)
+    # ==================================================================
+    async def radio_set_name(
+        self, name, *, actor_pubkey=None, actor_name=None,
+    ) -> dict:
+        """Set the node's advertised name. Audited as 'radio.name'."""
+        name = (name or "").strip()
+        if not name:
+            raise MgmtError("name is required", "invalid")
+        if len(name.encode("utf-8")) > 32:
+            raise MgmtError("name too long (max 32 bytes)", "invalid")
+        _radio_ok(await self.bot.mc.commands.set_name(name), "name change")
+        await self.bot.refresh_self_info()
+        await self._audit(actor_pubkey, actor_name, "radio.name", None, name)
+        return {"name": name}
+
+    async def radio_apply_settings(
+        self, *, freq=None, bw=None, sf=None, cr=None, tx_power=None,
+        lat=None, lon=None, adv_loc_policy=None, reboot=False,
+        actor_pubkey=None, actor_name=None,
+    ) -> dict:
+        """Apply any supplied radio/location settings, refresh self-info, and
+        optionally reboot. freq/bw/sf/cr are atomic (set_radio takes all four),
+        so they must be supplied together. Audited as 'radio.settings'."""
+        changed = []
+        if any(v is not None for v in (freq, bw, sf, cr)):
+            if None in (freq, bw, sf, cr):
+                raise MgmtError("freq, bw, sf and cr must be set together", "invalid")
+            try:
+                freq, bw, sf, cr = float(freq), float(bw), int(sf), int(cr)
+            except (TypeError, ValueError):
+                raise MgmtError("invalid radio parameter", "invalid")
+            _radio_ok(
+                await self.bot.mc.commands.set_radio(freq, bw, sf, cr), "radio params"
+            )
+            changed.append(f"freq={freq} bw={bw} sf={sf} cr={cr}")
+        if tx_power is not None:
+            try:
+                tx_power = int(tx_power)
+            except (TypeError, ValueError):
+                raise MgmtError("invalid tx_power", "invalid")
+            _radio_ok(await self.bot.mc.commands.set_tx_power(tx_power), "tx power")
+            changed.append(f"tx={tx_power}")
+        if lat is not None or lon is not None:
+            if lat is None or lon is None:
+                raise MgmtError("both lat and lon are required", "invalid")
+            try:
+                lat, lon = float(lat), float(lon)
+            except (TypeError, ValueError):
+                raise MgmtError("invalid coordinates", "invalid")
+            if not (-90 <= lat <= 90 and -180 <= lon <= 180):
+                raise MgmtError("coordinates out of range", "invalid")
+            _radio_ok(await self.bot.mc.commands.set_coords(lat, lon), "location")
+            changed.append(f"loc={lat},{lon}")
+        if adv_loc_policy is not None:
+            pol = 1 if adv_loc_policy else 0
+            _radio_ok(
+                await self.bot.mc.commands.set_advert_loc_policy(pol), "location policy"
+            )
+            changed.append(f"adv_loc={pol}")
+        if not changed:
+            raise MgmtError("no settings to change", "invalid")
+        await self.bot.refresh_self_info()
+        await self._audit(
+            actor_pubkey, actor_name, "radio.settings", None, " ".join(changed)
+        )
+        if reboot:
+            await self.radio_reboot(actor_pubkey=actor_pubkey, actor_name=actor_name)
+        return {"changed": changed, "rebooted": bool(reboot)}
+
+    async def radio_apply_identity(
+        self, *, name=None, private_key=None, reboot=False,
+        actor_pubkey=None, actor_name=None,
+    ) -> dict:
+        """Apply Identity-section changes: name and/or a new private key. The
+        key import changes the bot's identity — see _radio_import_key."""
+        result = {"rebooted": False}
+        if name is not None and name != "":
+            await self.radio_set_name(
+                name, actor_pubkey=actor_pubkey, actor_name=actor_name
+            )
+            result["name"] = name
+        if private_key:
+            result["pubkey"] = await self._radio_import_key(
+                private_key, actor_pubkey=actor_pubkey, actor_name=actor_name
+            )
+        elif name in (None, ""):
+            raise MgmtError("nothing to change", "invalid")
+        if reboot:
+            await self.radio_reboot(actor_pubkey=actor_pubkey, actor_name=actor_name)
+            result["rebooted"] = True
+        return result
+
+    async def _radio_import_key(
+        self, key_hex, *, actor_pubkey=None, actor_name=None,
+    ) -> str:
+        """Import a new 64-byte private key: the node gets a NEW pubkey. Existing
+        contacts can no longer DM the bot (shared secrets change) until they
+        re-add it. The bot adopts the new identity (rewrites its cached key file)
+        so a later restart doesn't reload the stale key. Audited 'radio.identity'."""
+        s = (key_hex or "").strip().replace(" ", "")
+        try:
+            key = bytes.fromhex(s)
+        except ValueError:
+            raise MgmtError("private key must be hex", "invalid")
+        if len(key) != 64:
+            raise MgmtError("private key must be 64 bytes (128 hex chars)", "invalid")
+        _radio_ok(await self.bot.mc.commands.import_private_key(key), "key import")
+        pubkey = await self.bot.adopt_new_private_key(key)
+        await self.bot.refresh_self_info()
+        await self._audit(
+            actor_pubkey, actor_name, "radio.identity", pubkey, "private key imported"
+        )
+        return pubkey
+
+    async def radio_reboot(self, *, actor_pubkey=None, actor_name=None) -> dict:
+        """Reboot the radio. Drops the bot's link (auto_reconnect restores it).
+        Audited as 'radio.reboot'."""
+        await self.bot.mc.commands.reboot()
+        await self._audit(actor_pubkey, actor_name, "radio.reboot", None, None)
+        return {"rebooted": True}
 
     async def send_dm(
         self, pubkey: str, text: str,

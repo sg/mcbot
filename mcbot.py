@@ -1461,6 +1461,17 @@ class MCBot:
         except Exception:
             self.logger.exception("get_bat failed")
 
+    async def refresh_self_info(self) -> None:
+        """Re-query the radio's SELF_INFO (appstart refreshes mc.self_info) and
+        persist it, so the device_info table reflects a just-applied change
+        immediately rather than on the next periodic sync."""
+        try:
+            ev = await self.mc.commands.send_appstart()
+            if ev and isinstance(ev.payload, dict):
+                await self._upsert_device_info(ev.payload, "self_info")
+        except Exception:
+            self.logger.exception("refresh_self_info failed")
+
     async def _upsert_device_info(self, payload: dict, group: str) -> None:
         now = int(time.time())
         for k, v in payload.items():
@@ -2679,6 +2690,29 @@ class MCBot:
             )
         self.my_pubkey_byte = self.my_public_key_bytes[0]
         return True
+
+    async def adopt_new_private_key(self, key: bytes) -> str:
+        """After a new private key is imported to the radio, make the bot adopt
+        the new identity: refresh the in-memory pubkey fields and rewrite the
+        cached key file. Without this the OLD cached key is reloaded on the next
+        start and DM decryption silently breaks. Returns the new pubkey hex."""
+        self.my_private_key = bytes(key)
+        self.my_public_key_bytes = derive_public_key(self.my_private_key)
+        self.my_pubkey = self.my_public_key_bytes.hex()
+        self.my_pubkey_byte = self.my_public_key_bytes[0]
+        path = self.cfg.privkey_path
+        if path:
+            try:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(self.my_private_key)
+                os.chmod(path, 0o600)
+            except Exception:
+                self.logger.exception("failed to rewrite cached key %s", path)
+        self.logger.warning(
+            "adopted new radio identity: pubkey=%s (contacts must re-add the "
+            "bot; old DMs no longer decrypt)", self.my_pubkey,
+        )
+        return self.my_pubkey
 
     async def _seed_channels_from_conf(self) -> None:
         # one-time seed of the channels table from mcbot.conf's [channels].
