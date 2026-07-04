@@ -1097,7 +1097,27 @@ the listed channels.
 ```
 !adm radio pathhash             show the radio's outgoing path-hash width
 !adm radio pathhash <1|2|3>     set it (bytes per hop; mode = bytes-1)
+!adm radio name <name>          set the node's advertised name
+!adm radio set freq=.. bw=.. sf=.. cr=.. [tx=..]   set radio params
+!adm radio preset [region]      list, or apply a region preset (freq/bw/sf/cr)
+!adm radio location <lat> <lon> set the node's coordinates
+!adm radio advloc <on|off>      include the node's location in adverts
+!adm radio reboot               reboot the radio (the bot reconnects)
+!adm radio key <128-hex>        import a private key — CHANGES the node identity
 ```
+
+These mirror the web **Manage → Radio** page (Identity + Radio Settings), go
+through the same audited management layer, and refresh the cached device info
+after applying. Notes:
+- `set` requires `freq`, `bw`, `sf` and `cr` together (the firmware sets them
+  atomically); `tx` may be given alone. Wrong values can isolate the node, and
+  radio-param changes usually need a `reboot` to take effect.
+- `preset` fills the region defaults; US/Canada and EU868 match MeshCore's
+  documented values, 433/ANZ are community defaults — verify for your area.
+- `key` is **destructive**: the node gets a new pubkey, so existing contacts
+  must re-add the bot and old DMs stop decrypting. The bot rewrites its cached
+  key file and adopts the new identity; a `reboot` is recommended. `!adm` is
+  DM-only and owner-gated, which is the access control for this.
 
 IMPORTANT: a radio's path-hash width only governs the encoding of packets
 **that radio originates**. The width of a *received* packet's path is set

@@ -18,7 +18,7 @@ import asyncio
 import json
 import time
 
-from management import Management, MgmtError
+from management import RADIO_PRESETS, Management, MgmtError
 
 NAME = "adm"
 TRIGGERS = ["!adm"]
@@ -63,6 +63,13 @@ _HELP = [
     ("command delay <seconds>",          "delay before sending replies (0 off, 0.1–2.0)"),
     ("command retry <count>",            "resend a channel reply if no repeat heard (0 off, max 5)"),
     ("radio pathhash [1|2|3]",           "show/set this radio's outgoing path-hash width"),
+    ("radio name <name>",                "set the node's advertised name"),
+    ("radio set freq=.. bw=.. sf=.. cr=.. [tx=..]", "set radio params (freq/bw/sf/cr together)"),
+    ("radio preset [region]",            "list/apply a region preset (freq/bw/sf/cr)"),
+    ("radio location <lat> <lon>",       "set the node's coordinates"),
+    ("radio advloc <on|off>",            "include the node's location in adverts"),
+    ("radio reboot",                     "reboot the radio"),
+    ("radio key <128-hex>",              "import a private key — CHANGES the node's identity"),
     ("advert <flood|zero>",              "send a flood or zero-hop advertisement"),
     ("advert interval <hours>",          "send a flood advert every N hours (0 disables)"),
     ("status",                           "bot health and runtime stats"),
@@ -716,7 +723,8 @@ _COMMAND_OPS = {
 async def _cmd_radio(ctx, rest):
     parts = rest.split(maxsplit=1)
     if not parts:
-        return "Usage: !adm radio <pathhash> ..."
+        return ("Usage: !adm radio <pathhash|name|set|preset|location|"
+                "advloc|reboot|key> ...")
     op = parts[0].lower()
     args = parts[1].strip() if len(parts) > 1 else ""
     handler = _RADIO_OPS.get(op)
@@ -767,8 +775,114 @@ async def _radio_pathhash(ctx, args):
     return f"out path-hash set to {want_bytes} byte(s)/hop (mode {mode})."
 
 
+async def _radio_name(ctx, args):
+    if not args.strip():
+        return "Usage: !adm radio name <new name>"
+    try:
+        r = await ctx.bot.mgmt.radio_set_name(args.strip(), **_actor(ctx))
+    except MgmtError as e:
+        return e.message
+    return f"radio name set to {r['name']!r}"
+
+
+async def _radio_set(ctx, args):
+    # !adm radio set freq=910.525 bw=62.5 sf=7 cr=5 tx=22
+    fields = {}
+    aliases = {"freq": "freq", "bw": "bw", "sf": "sf", "cr": "cr",
+               "tx": "tx_power", "txpower": "tx_power", "tx_power": "tx_power"}
+    for tok in args.split():
+        if "=" not in tok:
+            return "Usage: !adm radio set freq=.. bw=.. sf=.. cr=.. [tx=..]"
+        k, v = tok.split("=", 1)
+        dest = aliases.get(k.strip().lower())
+        if not dest:
+            return f"unknown field {k!r} (freq, bw, sf, cr, tx)"
+        fields[dest] = v.strip()
+    if not fields:
+        return "Usage: !adm radio set freq=.. bw=.. sf=.. cr=.. [tx=..]"
+    try:
+        r = await ctx.bot.mgmt.radio_apply_settings(**fields, **_actor(ctx))
+    except MgmtError as e:
+        return e.message
+    return "radio set: " + ", ".join(r["changed"])
+
+
+async def _radio_preset(ctx, args):
+    name = args.strip()
+    if not name:
+        return "Presets: " + " | ".join(RADIO_PRESETS)
+    match = next(
+        (k for k in RADIO_PRESETS
+         if k.lower() == name.lower() or name.lower() in k.lower()),
+        None,
+    )
+    if not match:
+        return "Unknown preset. Options: " + " | ".join(RADIO_PRESETS)
+    p = RADIO_PRESETS[match]
+    try:
+        r = await ctx.bot.mgmt.radio_apply_settings(
+            freq=p["freq"], bw=p["bw"], sf=p["sf"], cr=p["cr"], **_actor(ctx)
+        )
+    except MgmtError as e:
+        return e.message
+    return f"applied preset {match}: " + ", ".join(r["changed"])
+
+
+async def _radio_location(ctx, args):
+    p = args.split()
+    if len(p) < 2:
+        return "Usage: !adm radio location <lat> <lon>"
+    try:
+        r = await ctx.bot.mgmt.radio_apply_settings(lat=p[0], lon=p[1], **_actor(ctx))
+    except MgmtError as e:
+        return e.message
+    return "radio set: " + ", ".join(r["changed"])
+
+
+async def _radio_advloc(ctx, args):
+    v = args.strip().lower()
+    if v not in ("on", "off", "true", "false", "1", "0"):
+        return "Usage: !adm radio advloc <on|off>"
+    on = v in ("on", "true", "1")
+    try:
+        await ctx.bot.mgmt.radio_apply_settings(adv_loc_policy=on, **_actor(ctx))
+    except MgmtError as e:
+        return e.message
+    return f"advert location sharing {'on' if on else 'off'}"
+
+
+async def _radio_reboot(ctx, args):
+    try:
+        await ctx.bot.mgmt.radio_reboot(**_actor(ctx))
+    except MgmtError as e:
+        return e.message
+    return "radio rebooting… (the bot will reconnect)"
+
+
+async def _radio_key(ctx, args):
+    # DESTRUCTIVE: changes the node's identity (new pubkey). adm is DM-only and
+    # owner-authorized, which is the gate for this.
+    key = args.strip()
+    if not key:
+        return ("Usage: !adm radio key <128-hex private key> — WARNING: gives "
+                "the node a NEW identity; contacts must re-add the bot")
+    try:
+        r = await ctx.bot.mgmt.radio_apply_identity(private_key=key, **_actor(ctx))
+    except MgmtError as e:
+        return e.message
+    return (f"new identity imported; pubkey={r['pubkey'][:16]}… — "
+            "reboot recommended (!adm radio reboot)")
+
+
 _RADIO_OPS = {
     "pathhash": _radio_pathhash,
+    "name": _radio_name,
+    "set": _radio_set,
+    "preset": _radio_preset,
+    "location": _radio_location,
+    "advloc": _radio_advloc,
+    "reboot": _radio_reboot,
+    "key": _radio_key,
 }
 
 
