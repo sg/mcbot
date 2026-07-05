@@ -97,6 +97,14 @@ logs/mcbot.log           rotating log file (created on first run)
   - `requests` — used by the example weather commands
 
 
+## Tests
+
+```bash
+pip install -r requirements-dev.txt   # pytest + pytest-asyncio
+python -m pytest                      # runs everything under tests/
+```
+
+
 ## Web admin UI / API (optional)
 
 An optional in-process web UI + REST/WebSocket API for managing the bot,

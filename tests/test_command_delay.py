@@ -1,40 +1,15 @@
-#!/usr/bin/env python3
 """Command-response delay: config seeds the DB on first run, then the DB value
 is authoritative and runtime-managed (clamped, validated, audited). The delay
 is applied in _dispatch_command AFTER the handler runs and BEFORE the reply is
-sent.
-
-Run: /home/steve/dev/meshcore/meshcore-bot/venv/bin/python tests/test_command_delay.py
-"""
+sent."""
 
 import asyncio
-import sys
-from pathlib import Path
 from types import SimpleNamespace
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import pytest
 
-import mcbot  # noqa: E402
-from management import MgmtError  # noqa: E402
-
-_failures = 0
-
-
-def check(cond, msg):
-    global _failures
-    print(f"  {'ok' if cond else 'FAIL'}: {msg}")
-    if not cond:
-        _failures += 1
-
-
-def make_bot(*, command_delay=0.0):
-    cfg = mcbot.Config()
-    cfg.db_path = Path(":memory:")
-    cfg.command_delay = command_delay
-    log = mcbot.logging.getLogger("test-cmd-delay")
-    log.addHandler(mcbot.logging.NullHandler())
-    log.propagate = False
-    return mcbot.MCBot(cfg, log)
+import mcbot
+from management import MgmtError
 
 
 async def meta(bot):
@@ -44,60 +19,49 @@ async def meta(bot):
     return row["value"] if row else None
 
 
-async def test_seed_from_config_when_db_empty():
-    print("test_seed_from_config_when_db_empty")
-    bot = make_bot(command_delay=0.3)
+async def test_seed_from_config_when_db_empty(bot_factory):
+    bot = bot_factory(command_delay=0.3)
     await bot.load_runtime_settings()
-    check(bot.command_delay == 0.3, "seeded delay from config")
-    check(await meta(bot) == "0.3", "config value written to bot_meta")
-    bot.db.close()
+    assert bot.command_delay == 0.3, "seeded delay from config"
+    assert await meta(bot) == "0.3", "config value written to bot_meta"
 
 
-async def test_db_is_authoritative_over_config():
-    print("test_db_is_authoritative_over_config")
-    bot = make_bot(command_delay=0.3)
+async def test_db_is_authoritative_over_config(bot_factory):
+    bot = bot_factory(command_delay=0.3)
     await bot.db.execute(
         "INSERT INTO bot_meta(key,value) VALUES('command_delay','1.5')"
     )
     await bot.load_runtime_settings()
-    check(bot.command_delay == 1.5, "DB value wins over config")
-    bot.db.close()
+    assert bot.command_delay == 1.5, "DB value wins over config"
 
 
-async def test_set_clamps_and_persists():
-    print("test_set_clamps_and_persists")
-    bot = make_bot()
+async def test_set_clamps_and_persists(bot_factory):
+    bot = bot_factory()
     await bot.set_runtime_setting("command_delay", 0.5)
-    check(bot.command_delay == 0.5, "in-memory value updated")
-    check(await meta(bot) == "0.5", "value persisted to bot_meta")
+    assert bot.command_delay == 0.5, "in-memory value updated"
+    assert await meta(bot) == "0.5", "value persisted to bot_meta"
     await bot.set_runtime_setting("command_delay", 5.0)
-    check(bot.command_delay == 2.0, "clamps above 2.0")
+    assert bot.command_delay == 2.0, "clamps above 2.0"
     await bot.set_runtime_setting("command_delay", -1)
-    check(bot.command_delay == 0.0, "clamps below 0 (disabled)")
-    bot.db.close()
+    assert bot.command_delay == 0.0, "clamps below 0 (disabled)"
 
 
-async def test_mgmt_validation_and_audit():
-    print("test_mgmt_validation_and_audit")
-    bot = make_bot()
+async def test_mgmt_validation_and_audit(bot_factory):
+    bot = bot_factory()
     r = await bot.mgmt.setting_set("command_delay", 1.0)
-    check(r == {"key": "command_delay", "value": 1.0}, "valid set returns delay")
+    assert r == {"key": "command_delay", "value": 1.0}
     g = await bot.mgmt.setting_get("command_delay")
-    check(g == {"key": "command_delay", "value": 1.0}, "get returns current delay")
+    assert g == {"key": "command_delay", "value": 1.0}
     r0 = await bot.mgmt.setting_set("command_delay", 0)
-    check(r0 == {"key": "command_delay", "value": 0.0}, "0 disables (accepted)")
+    assert r0 == {"key": "command_delay", "value": 0.0}, "0 disables (accepted)"
     for bad in (0.05, 2.1, -0.5, "abc"):
-        try:
+        with pytest.raises(MgmtError):
             await bot.mgmt.setting_set("command_delay", bad)
-            check(False, f"invalid delay {bad!r} should raise")
-        except MgmtError:
-            check(True, f"invalid delay {bad!r} rejected")
     row = await bot.db.fetchone(
         "SELECT detail FROM bot_audit_log WHERE action='command.delay' "
         "ORDER BY id DESC LIMIT 1"
     )
-    check(row is not None and "delay=" in row["detail"], "set is audited")
-    bot.db.close()
+    assert row is not None and "delay=" in row["detail"], "set is audited"
 
 
 def _ctx(bot):
@@ -139,57 +103,32 @@ async def _run_dispatch(bot):
     bot.send_reply = fake_send_reply
 
     sleeps = []
-    real_sleep = mcbot.asyncio.sleep
+    real_sleep = asyncio.sleep
 
     async def fake_sleep(d):
         sleeps.append(d)
         events.append(("sleep", d))
 
-    mcbot.asyncio.sleep = fake_sleep
+    asyncio.sleep = fake_sleep
     try:
         await bot._dispatch_command(_ctx(bot))
     finally:
-        mcbot.asyncio.sleep = real_sleep
+        asyncio.sleep = real_sleep
     return events, sleeps
 
 
-async def test_dispatch_delays_after_handler_before_send():
-    print("test_dispatch_delays_after_handler_before_send")
-    bot = make_bot()
+async def test_dispatch_delays_after_handler_before_send(bot_factory):
+    bot = bot_factory()
     await bot.set_runtime_setting("command_delay", 0.5)
     events, sleeps = await _run_dispatch(bot)
-    check(sleeps == [0.5], f"slept once for command_delay (got {sleeps})")
-    check([e[0] for e in events] == ["handle", "sleep", "send"],
-          f"delay applied after handler, before send (got {events})")
-    bot.db.close()
+    assert sleeps == [0.5], f"slept once for command_delay (got {sleeps})"
+    assert [e[0] for e in events] == ["handle", "sleep", "send"], \
+        f"delay applied after handler, before send (got {events})"
 
 
-async def test_dispatch_no_delay_when_disabled():
-    print("test_dispatch_no_delay_when_disabled")
-    bot = make_bot()  # delay defaults to 0
+async def test_dispatch_no_delay_when_disabled(bot_factory):
+    bot = bot_factory()  # delay defaults to 0
     events, sleeps = await _run_dispatch(bot)
-    check(sleeps == [], "no sleep when delay disabled")
-    check([e[0] for e in events] == ["handle", "send"],
-          f"handler then send, no delay (got {events})")
-    bot.db.close()
-
-
-async def main():
-    for t in (
-        test_seed_from_config_when_db_empty,
-        test_db_is_authoritative_over_config,
-        test_set_clamps_and_persists,
-        test_mgmt_validation_and_audit,
-        test_dispatch_delays_after_handler_before_send,
-        test_dispatch_no_delay_when_disabled,
-    ):
-        await t()
-    print()
-    if _failures:
-        print(f"FAILED: {_failures} check(s)")
-        sys.exit(1)
-    print("ALL TESTS PASSED")
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
+    assert sleeps == [], "no sleep when delay disabled"
+    assert [e[0] for e in events] == ["handle", "send"], \
+        f"handler then send, no delay (got {events})"

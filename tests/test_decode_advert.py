@@ -1,26 +1,7 @@
-#!/usr/bin/env python3
 """The packet decoder must extract a node's name (and location) from an ADVERT
-payload, not just the public key.
+payload, not just the public key."""
 
-Run: /home/steve/dev/meshcore/meshcore-bot/venv/bin/python tests/test_decode_advert.py
-"""
-
-import asyncio
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
-from webapi import decode as D  # noqa: E402
-
-_failures = 0
-
-
-def check(cond, msg):
-    global _failures
-    print(f"  {'ok' if cond else 'FAIL'}: {msg}")
-    if not cond:
-        _failures += 1
+from webapi import decode as D
 
 
 def advert_body(name, *, lat=None, lon=None, adv_type=1):
@@ -41,38 +22,36 @@ def advert_body(name, *, lat=None, lon=None, adv_type=1):
     return pubkey + ts + sig + bytes([flags]) + loc + nm
 
 
-def main():
+def test_name_and_location_decoded():
     r = D._decode_advert(advert_body("B30-Automatica", lat=30.30854, lon=-97.94501))
-    check(r.get("name") == "B30-Automatica", "name decoded (with location)")
-    check(r.get("public_key", "").startswith("000102"), "public_key decoded")
-    check(r.get("adv_type") == 1, "adv_type decoded")
-    check(abs(r.get("lat", 0) - 30.30854) < 1e-6, "lat decoded")
-    check(abs(r.get("lon", 0) + 97.94501) < 1e-6, "lon decoded")
+    assert r.get("name") == "B30-Automatica", "name decoded (with location)"
+    assert r.get("public_key", "").startswith("000102"), "public_key decoded"
+    assert r.get("adv_type") == 1, "adv_type decoded"
+    assert abs(r.get("lat", 0) - 30.30854) < 1e-6, "lat decoded"
+    assert abs(r.get("lon", 0) + 97.94501) < 1e-6, "lon decoded"
 
-    r2 = D._decode_advert(advert_body("JustAName"))
-    check(r2.get("name") == "JustAName", "name decoded (no location)")
-    check("lat" not in r2, "no lat when location flag unset")
 
-    r3 = D._decode_advert(advert_body(None))
-    check("name" not in r3, "no name key when name flag unset")
+def test_name_without_location():
+    r = D._decode_advert(advert_body("JustAName"))
+    assert r.get("name") == "JustAName", "name decoded (no location)"
+    assert "lat" not in r, "no lat when location flag unset"
 
+
+def test_no_name_flag():
+    r = D._decode_advert(advert_body(None))
+    assert "name" not in r, "no name key when name flag unset"
+
+
+def test_truncated_body_no_crash():
     # truncated body must not raise and must still give the public key
-    r4 = D._decode_advert(bytes(range(32)) + b"\x00\x00")
-    check(r4.get("public_key", "").startswith("000102") and "name" not in r4,
-          "truncated advert: public_key only, no crash")
+    r = D._decode_advert(bytes(range(32)) + b"\x00\x00")
+    assert r.get("public_key", "").startswith("000102") and "name" not in r, \
+        "truncated advert: public_key only, no crash"
 
-    # end-to-end through decode_packet (header: ADVERT payload type, 0-hop path)
+
+async def test_end_to_end_decode_packet():
+    # header: ADVERT payload type, 0-hop path
     raw = bytes([(4 << 2) | 1, 0x00]) + advert_body("EndToEnd-Node")
-    res = asyncio.run(D.decode_packet(raw, bot=None))
-    check(res.get("decoded", {}).get("name") == "EndToEnd-Node",
-          "name surfaces via decode_packet")
-
-    print()
-    if _failures:
-        print(f"FAILED: {_failures} check(s)")
-        sys.exit(1)
-    print("ALL TESTS PASSED")
-
-
-if __name__ == "__main__":
-    main()
+    res = await D.decode_packet(raw, bot=None)
+    assert res.get("decoded", {}).get("name") == "EndToEnd-Node", \
+        "name surfaces via decode_packet"
