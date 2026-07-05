@@ -38,6 +38,7 @@ from protocol import (
     format_path,
     parse_packet_envelope,
 )
+from settings import SETTINGS
 
 @dataclass
 class RepeatWatch:
@@ -134,20 +135,14 @@ class MCBot:
         self.evict_headroom: int = cfg.radio_evict_headroom
         self._evict_lock = asyncio.Lock()
         self._last_auto_evict: float = 0.0  # monotonic
-        # periodic flood advert. seeded from cfg, then DB-authoritative (loaded
-        # via _load_advert_interval at startup, persisted by set_advert_interval).
-        # _last_flood_advert (monotonic) anchors the schedule; the periodic task
-        # measures the interval from it, and any flood advert (manual or
-        # periodic) refreshes it.
-        self.advert_interval_hours: int = cfg.advert_interval_hours
+        # registry-managed runtime settings (settings.SETTINGS): seeded from
+        # cfg here, then DB-authoritative once load_runtime_settings() runs.
+        for _s in SETTINGS.values():
+            setattr(self, _s.key, getattr(cfg, _s.key))
+        # _last_flood_advert (monotonic) anchors the periodic-advert schedule;
+        # the periodic task measures advert_interval_hours from it, and any
+        # flood advert (manual or periodic) refreshes it.
         self._last_flood_advert: float = 0.0
-        # delay before transmitting command responses (seconds). seeded from
-        # cfg, then DB-authoritative (loaded via _load_command_delay at startup,
-        # persisted by set_command_delay).
-        self.command_delay: float = cfg.command_delay
-        # no-repeat channel resend budget. seeded from cfg, then DB-authoritative
-        # (loaded via _load_channel_retry_max, persisted by set_channel_retry_max).
-        self.channel_retry_max: int = cfg.channel_retry_max
 
     # channel logging filter
     def _parse_log_channels(self) -> None:
@@ -2467,98 +2462,50 @@ class MCBot:
             self._last_flood_advert = time.monotonic()
         return ev
 
-    # --- periodic flood advert (interval seeded from config, then DB-managed) ---
-    async def _load_advert_interval(self) -> None:
-        # DB is authoritative; seed it from config on first run (key absent).
-        row = await self.db.fetchone(
-            "SELECT value FROM bot_meta WHERE key='advert_interval_hours'"
-        )
-        val = row["value"] if row else None
-        if val is not None and str(val).lstrip("-").isdigit():
-            self.advert_interval_hours = max(0, int(val))
-        else:
-            self.advert_interval_hours = self.cfg.advert_interval_hours
-            await self.db.execute(
-                "INSERT INTO bot_meta(key,value) VALUES('advert_interval_hours',?) "
-                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                (str(self.advert_interval_hours),),
-            )
-
-    async def set_advert_interval(self, hours: int) -> None:
-        # update the runtime value, persist to the DB, and restart the schedule
-        # from now (so a change doesn't trigger an immediate overdue advert).
-        self.advert_interval_hours = max(0, int(hours))
+    # --- runtime settings (registry-driven; each seeded from config on
+    #     first run, then DB-managed — see settings.SETTINGS) ---
+    def reset_advert_schedule(self) -> None:
+        # restart the periodic-advert schedule from now, so an interval
+        # change doesn't trigger an immediate overdue advert.
         self._last_flood_advert = time.monotonic()
-        await self.db.execute(
-            "INSERT INTO bot_meta(key,value) VALUES('advert_interval_hours',?) "
-            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-            (str(self.advert_interval_hours),),
-        )
-        self.logger.info(
-            "flood advert interval set to %dh%s",
-            self.advert_interval_hours,
-            " (disabled)" if self.advert_interval_hours == 0 else "",
-        )
 
-    # --- command response delay (seeded from config, then DB-managed) ---
-    async def _load_command_delay(self) -> None:
-        # DB is authoritative; seed it from config on first run (key absent).
-        row = await self.db.fetchone(
-            "SELECT value FROM bot_meta WHERE key='command_delay'"
-        )
-        val = row["value"] if row else None
-        try:
-            self.command_delay = min(2.0, max(0.0, float(val)))
-        except (TypeError, ValueError):
-            self.command_delay = self.cfg.command_delay
-            await self.db.execute(
-                "INSERT INTO bot_meta(key,value) VALUES('command_delay',?) "
-                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                (str(self.command_delay),),
+    async def load_runtime_settings(self) -> None:
+        # DB is authoritative; seed it from config on first run (key absent
+        # or unparseable).
+        for s in SETTINGS.values():
+            row = await self.db.fetchone(
+                "SELECT value FROM bot_meta WHERE key=?", (s.key,)
             )
+            try:
+                value = s.clamp(row["value"])
+            except (TypeError, ValueError):
+                value = getattr(self.cfg, s.key)
+                await self.db.execute(
+                    "INSERT INTO bot_meta(key,value) VALUES(?,?) "
+                    "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                    (s.key, str(value)),
+                )
+            setattr(self, s.key, value)
 
-    async def set_command_delay(self, seconds: float) -> None:
-        self.command_delay = min(2.0, max(0.0, float(seconds)))
+    async def set_runtime_setting(self, key: str, value):
+        # apply + persist a registry setting and run its side-effect hook.
+        # validation is the caller's job (management.setting_set).
+        s = SETTINGS[key]
+        value = s.clamp(value)
+        setattr(self, s.key, value)
         await self.db.execute(
-            "INSERT INTO bot_meta(key,value) VALUES('command_delay',?) "
+            "INSERT INTO bot_meta(key,value) VALUES(?,?) "
             "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-            (str(self.command_delay),),
+            (s.key, str(value)),
         )
+        if s.on_set:
+            getattr(self, s.on_set)()
         self.logger.info(
-            "command response delay set to %.1fs%s",
-            self.command_delay,
-            " (disabled)" if self.command_delay == 0 else "",
+            "%s set to %s%s%s",
+            s.label, value, f" {s.unit}" if s.unit else "",
+            " (disabled)" if not value else "",
         )
-
-    # --- channel no-repeat retry budget (seeded from config, then DB-managed) ---
-    async def _load_channel_retry_max(self) -> None:
-        # DB is authoritative; seed it from config on first run (key absent).
-        row = await self.db.fetchone(
-            "SELECT value FROM bot_meta WHERE key='channel_retry_max'"
-        )
-        val = row["value"] if row else None
-        try:
-            self.channel_retry_max = min(5, max(0, int(val)))
-        except (TypeError, ValueError):
-            self.channel_retry_max = self.cfg.channel_retry_max
-            await self.db.execute(
-                "INSERT INTO bot_meta(key,value) VALUES('channel_retry_max',?) "
-                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                (str(self.channel_retry_max),),
-            )
-
-    async def set_channel_retry_max(self, count: int) -> None:
-        self.channel_retry_max = min(5, max(0, int(count)))
-        await self.db.execute(
-            "INSERT INTO bot_meta(key,value) VALUES('channel_retry_max',?) "
-            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-            (str(self.channel_retry_max),),
-        )
-        self.logger.info(
-            "channel no-repeat retry budget set to %d%s",
-            self.channel_retry_max,
-            " (disabled)" if self.channel_retry_max == 0 else "",
-        )
+        return value
 
     async def send_channel_text(self, channel_idx: int, text: str):
         # single-shot channel send (channel messages have no ACK). returns
@@ -2738,9 +2685,7 @@ class MCBot:
         await self._program_channels_on_radio()
         await self._bootstrap_admin_state()
         await self.seed_command_configs()
-        await self._load_advert_interval()
-        await self._load_command_delay()
-        await self._load_channel_retry_max()
+        await self.load_runtime_settings()
 
         # ensure radio contact-table headroom on startup (device_info +
         # contacts have been synced above; owners are bootstrapped into

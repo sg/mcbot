@@ -46,7 +46,7 @@ async def meta(bot):
 async def test_seed_from_config_when_db_empty():
     print("test_seed_from_config_when_db_empty")
     bot = make_bot(advert_interval_hours=3)
-    await bot._load_advert_interval()
+    await bot.load_runtime_settings()
     check(bot.advert_interval_hours == 3, "seeded interval from config")
     check(await meta(bot) == "3", "config value written to bot_meta")
     bot.db.close()
@@ -58,7 +58,7 @@ async def test_db_is_authoritative_over_config():
     await bot.db.execute(
         "INSERT INTO bot_meta(key,value) VALUES('advert_interval_hours','5')"
     )
-    await bot._load_advert_interval()
+    await bot.load_runtime_settings()
     check(bot.advert_interval_hours == 5, "DB value wins over config")
     bot.db.close()
 
@@ -67,11 +67,11 @@ async def test_set_persists_and_resets_schedule():
     print("test_set_persists_and_resets_schedule")
     bot = make_bot()
     bot._last_flood_advert = 0.0
-    await bot.set_advert_interval(7)
+    await bot.set_runtime_setting("advert_interval_hours", 7)
     check(bot.advert_interval_hours == 7, "in-memory value updated")
     check(await meta(bot) == "7", "value persisted to bot_meta")
     check(bot._last_flood_advert > 0, "schedule baseline reset to now")
-    await bot.set_advert_interval(0)
+    await bot.set_runtime_setting("advert_interval_hours", 0)
     check(bot.advert_interval_hours == 0 and await meta(bot) == "0", "disable persists")
     bot.db.close()
 
@@ -79,14 +79,14 @@ async def test_set_persists_and_resets_schedule():
 async def test_mgmt_validation_and_audit():
     print("test_mgmt_validation_and_audit")
     bot = make_bot()
-    r = await bot.mgmt.radio_set_advert_interval(4)
-    check(r == {"interval_hours": 4}, "valid set returns interval")
+    r = await bot.mgmt.setting_set("advert_interval_hours", 4)
+    check(r == {"key": "advert_interval_hours", "value": 4}, "valid set returns interval")
     check(await meta(bot) == "4", "mgmt set persisted")
-    g = await bot.mgmt.radio_advert_interval()
-    check(g == {"interval_hours": 4}, "get returns current interval")
+    g = await bot.mgmt.setting_get("advert_interval_hours")
+    check(g == {"key": "advert_interval_hours", "value": 4}, "get returns current interval")
     for bad in (-1, 169, "abc"):
         try:
-            await bot.mgmt.radio_set_advert_interval(bad)
+            await bot.mgmt.setting_set("advert_interval_hours", bad)
             check(False, f"invalid interval {bad!r} should raise")
         except MgmtError:
             check(True, f"invalid interval {bad!r} rejected")

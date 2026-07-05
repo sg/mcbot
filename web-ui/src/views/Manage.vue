@@ -65,16 +65,15 @@ async function loadTab(key, force = false) {
     const r = await api(endpoints[key])
     data.value[key] = decorate(key, r)
     if (key === 'contacts') rememberContactTypes(data.value[key])
-    // Radio tab: advert interval + presets + snapshot values into the forms.
+    // Radio tab: runtime settings + presets + snapshot values into the forms.
     if (key === 'radio') {
-      await loadAdvertInterval()
+      await loadSettings()
       await loadRadioPresets()
       populateRadioForms()
     }
-    // Commands tab shows the pre-send response delay + no-repeat retry budget.
+    // Commands tab shows its runtime settings (response delay, retry budget).
     if (key === 'command-config') {
-      await loadCommandDelay()
-      await loadCommandRetry()
+      await loadSettings()
     }
     // users/groups tabs (and the Users "create bot user" form) need the
     // list of group names for their group pickers.
@@ -249,23 +248,28 @@ async function sendAdvert() {
   advertSending.value = false
 }
 
-// ---- periodic flood advert interval (hours; 0 = disabled) ----
-const advertInterval = ref(0)
-async function loadAdvertInterval() {
+// ---- runtime settings (registry-driven; rows render per tab via group) ----
+const settings = ref({})
+async function loadSettings() {
   try {
-    const r = await api('/radio/advert-interval')
-    advertInterval.value = r.interval_hours
+    const m = {}
+    for (const s of await api('/settings')) m[s.key] = s
+    settings.value = m
   } catch (e) {
     error.value = e.message
   }
 }
-async function applyAdvertInterval() {
-  const n = Number(advertInterval.value)
+function settingsFor(group) {
+  return Object.values(settings.value).filter((s) => s.group === group)
+}
+async function applySetting(key) {
+  const s = settings.value[key]
+  const n = Number(s.value)
   await run(
-    api('/radio/advert-interval', { method: 'POST', json: { interval_hours: n } }),
-    n > 0 ? `Flood advert every ${n}h` : 'Periodic flood advert disabled',
+    api(`/settings/${key}`, { method: 'PUT', json: { value: n } }),
+    n > 0 ? `${s.label}: ${n}${s.unit ? ' ' + s.unit : ''}` : `${s.label} disabled`,
   )
-  await loadAdvertInterval()
+  await loadSettings()
 }
 
 // ---- radio config forms (Identity + Radio settings) ----
@@ -369,44 +373,6 @@ async function saveRadio() {
   }
   if (f.adv_loc_policy !== o.adv_loc_policy) body.adv_loc_policy = f.adv_loc_policy
   await run(api('/radio/settings', { method: 'POST', json: body }), 'radio settings updated', ['radio'])
-}
-
-// ---- command response delay (seconds; 0 = disabled) ----
-const commandDelay = ref(0)
-async function loadCommandDelay() {
-  try {
-    const r = await api('/command-delay')
-    commandDelay.value = r.delay
-  } catch (e) {
-    error.value = e.message
-  }
-}
-async function applyCommandDelay() {
-  const n = Number(commandDelay.value)
-  await run(
-    api('/command-delay', { method: 'POST', json: { delay: n } }),
-    n > 0 ? `Command response delay ${n.toFixed(1)}s` : 'Command response delay disabled',
-  )
-  await loadCommandDelay()
-}
-
-// ---- channel no-repeat retry budget (count; 0 = disabled) ----
-const commandRetry = ref(0)
-async function loadCommandRetry() {
-  try {
-    const r = await api('/command-retry')
-    commandRetry.value = r.retries
-  } catch (e) {
-    error.value = e.message
-  }
-}
-async function applyCommandRetry() {
-  const n = Number(commandRetry.value)
-  await run(
-    api('/command-retry', { method: 'POST', json: { retries: n } }),
-    n > 0 ? `Channel no-repeat retries ${n}` : 'Channel no-repeat retry disabled',
-  )
-  await loadCommandRetry()
 }
 
 // ---- radio contact-table rollover ----
@@ -1013,18 +979,20 @@ onUnmounted(() => window.removeEventListener('keydown', onContactKey))
             <InfoTip text="Zero-hop reaches direct neighbors only; flood propagates through the mesh." />
           </div>
 
-          <div class="toolbar">
+          <div v-for="s in settingsFor('radio')" :key="s.key" class="toolbar">
             <label class="chk">
-              Flood advert interval (hours)
+              {{ s.label }}<template v-if="s.unit"> ({{ s.unit }})</template>
               <input
                 type="number"
-                min="0"
-                v-model.number="advertInterval"
+                :min="s.min"
+                :max="s.max"
+                :step="s.step"
+                v-model.number="s.value"
                 style="width: 5em"
               />
             </label>
-            <button @click="applyAdvertInterval">Apply</button>
-            <InfoTip text="0 = disabled. Bot sends a flood advert every N hours; persists in the database (mcbot.conf only seeds the first-run default)." />
+            <button @click="applySetting(s.key)">Apply</button>
+            <InfoTip :text="s.description" />
           </div>
 
           <!-- Contact-table rollover -->
@@ -1231,35 +1199,20 @@ onUnmounted(() => window.removeEventListener('keydown', onContactKey))
 
         <!-- Command config (editable) -->
         <div v-else-if="active === 'command-config'">
-          <div class="toolbar">
+          <div v-for="s in settingsFor('commands')" :key="s.key" class="toolbar">
             <label class="chk">
-              Response delay (seconds)
+              {{ s.label }}<template v-if="s.unit"> ({{ s.unit }})</template>
               <input
                 type="number"
-                min="0"
-                max="2"
-                step="0.1"
-                v-model.number="commandDelay"
+                :min="s.min"
+                :max="s.max"
+                :step="s.step"
+                v-model.number="s.value"
                 style="width: 5em"
               />
             </label>
-            <button @click="applyCommandDelay">Apply</button>
-            <InfoTip text="0 = disabled, otherwise 0.1–2.0s. Held right before each reply is transmitted (after lookups/queries), to test whether nearby repeaters miss replies sent too quickly. Persists in the database (mcbot.conf only seeds the first-run default)." />
-          </div>
-          <div class="toolbar">
-            <label class="chk">
-              Channel resend on no-repeat
-              <input
-                type="number"
-                min="0"
-                max="5"
-                step="1"
-                v-model.number="commandRetry"
-                style="width: 5em"
-              />
-            </label>
-            <button @click="applyCommandRetry">Apply</button>
-            <InfoTip text="0 = disabled, otherwise up to 5. If a channel message the bot sent gets no repeater rebroadcast within the repeat window, resend it this many times — an identical retransmit (same timestamp) that only repeaters which missed it pick up, so no duplicates. Needs repeat tracking on. Persists in the database (mcbot.conf only seeds the first-run default)." />
+            <button @click="applySetting(s.key)">Apply</button>
+            <InfoTip :text="s.description" />
           </div>
           <table>
             <thead>

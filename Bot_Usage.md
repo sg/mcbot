@@ -1092,6 +1092,21 @@ allowlist semantics: a command with no listed channels responds on any
 channel the bot can decrypt; adding the first channel restricts it to only
 the listed channels.
 
+#### Runtime settings
+
+```
+!adm setting                    list all runtime settings and their values
+!adm setting <key>              show one setting
+!adm setting <key> <value>      set it (validated, audited, persisted)
+```
+
+All DB-persisted tunables (`advert_interval_hours`, `command_delay`,
+`channel_retry_max`) live in one registry (`settings.py`); the friendly
+aliases above (`!adm command delay/retry`, `!adm advert interval`) and the
+web UI controls route through it, so they are interchangeable. Each setting
+follows the same lifecycle: the `mcbot.conf` value seeds the database on
+first run, after which the DB copy is authoritative and survives restarts.
+
 #### Radio settings
 
 ```
