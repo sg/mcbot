@@ -28,6 +28,8 @@ import json
 import time
 from typing import Any, Optional
 
+from protocol import CONTACT_TYPE_NAMES
+
 
 class MgmtError(Exception):
     """A management invariant was violated. `.message` is user-safe.
@@ -765,13 +767,12 @@ class Management:
     # Radio contact-table rollover
     # ==================================================================
     def _evict_policy(self) -> dict:
-        import mcbot  # local import avoids any import-time cycle
         bot = self.bot
         return {
             "enabled": bot.evict_enabled,
             "headroom": bot.evict_headroom,
             "protect_types": sorted(
-                mcbot.CONTACT_TYPE_NAMES.get(t, str(t))
+                CONTACT_TYPE_NAMES.get(t, str(t))
                 for t in bot.cfg.radio_evict_protect_types
             ),
             "max_per_run": bot.cfg.radio_evict_max_per_run,
