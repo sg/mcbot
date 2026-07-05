@@ -1,6 +1,6 @@
 """Raw-packet breakout for the web inspector.
 
-Reuses the bot's in-tree decoder (mcbot.parse_packet_envelope and the
+Reuses the bot's in-tree decoder (protocol.parse_packet_envelope and the
 decryptors) to turn an on-air packet into a list of fields with byte
 offsets/lengths — so the UI can map a selected hex span to its element —
 plus a best-effort higher-level decode (channel text / DM / advert) when
@@ -9,7 +9,8 @@ the relevant keys are available.
 
 from __future__ import annotations
 
-import mcbot
+import crypto
+import protocol
 
 _ROUTE_TYPES = {
     0: "transport_flood",
@@ -21,7 +22,7 @@ _ROUTE_TYPES = {
 
 def _payload_type_name(pt: int) -> str:
     try:
-        return mcbot.PayloadType(pt).name
+        return protocol.PayloadType(pt).name
     except ValueError:
         return f"UNKNOWN_{pt:#04x}"
 
@@ -88,7 +89,7 @@ async def decode_packet(raw: bytes, bot) -> dict:
         out["error"] = "reserved path hash mode 3"
         return out
     plen = hop_count * hash_size
-    if plen > mcbot.MAX_PATH_SIZE or len(raw) < offset + plen:
+    if plen > protocol.MAX_PATH_SIZE or len(raw) < offset + plen:
         out["error"] = "truncated path"
         return out
     path = raw[offset:offset + plen]
@@ -119,11 +120,11 @@ async def decode_packet(raw: bytes, bot) -> dict:
 
 async def _decode_payload(payload_type: int, payload: bytes, bot) -> dict:
     """Best-effort higher-level decode using available keys."""
-    if payload_type == mcbot.PayloadType.GROUP_TEXT.value:
+    if payload_type == protocol.PayloadType.GROUP_TEXT.value:
         return await _decode_channel(payload, bot)
-    if payload_type == mcbot.PayloadType.TEXT_MESSAGE.value:
+    if payload_type == protocol.PayloadType.TEXT_MESSAGE.value:
         return await _decode_dm(payload, bot)
-    if payload_type == mcbot.PayloadType.ADVERT.value:
+    if payload_type == protocol.PayloadType.ADVERT.value:
         return _decode_advert(payload)
     return {"type": _payload_type_name(payload_type), "note": "no decoder"}
 
@@ -175,7 +176,7 @@ async def _decode_channel(payload: bytes, bot) -> dict:
         res["note"] = "no channel key matches this hash"
         return res
     idx, name, secret = entry
-    dec = mcbot.decrypt_group_text(payload, secret)
+    dec = crypto.decrypt_group_text(payload, secret)
     res["channel_idx"] = idx
     res["channel_name"] = name
     if dec is None:
@@ -216,7 +217,7 @@ async def _decode_dm(payload: bytes, bot) -> dict:
             their_pk = bytes.fromhex(r["public_key"])
         except ValueError:
             continue
-        dec = mcbot.try_decrypt_dm(
+        dec = crypto.try_decrypt_dm(
             payload, bot.my_private_key, their_pk, bot.my_pubkey_byte
         )
         if dec is not None:
