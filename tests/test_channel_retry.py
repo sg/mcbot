@@ -1,37 +1,9 @@
-#!/usr/bin/env python3
 """Channel no-repeat retry budget: config seeds the DB on first run, then the
-DB value is authoritative and runtime-managed (clamped 0–5, validated, audited).
+DB value is authoritative and runtime-managed (clamped 0–5, validated, audited)."""
 
-Run: /home/steve/dev/meshcore/meshcore-bot/venv/bin/python tests/test_channel_retry.py
-"""
+import pytest
 
-import asyncio
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
-import mcbot  # noqa: E402
-from management import MgmtError  # noqa: E402
-
-_failures = 0
-
-
-def check(cond, msg):
-    global _failures
-    print(f"  {'ok' if cond else 'FAIL'}: {msg}")
-    if not cond:
-        _failures += 1
-
-
-def make_bot(*, channel_retry_max=2):
-    cfg = mcbot.Config()
-    cfg.db_path = Path(":memory:")
-    cfg.channel_retry_max = channel_retry_max
-    log = mcbot.logging.getLogger("test-chan-retry")
-    log.addHandler(mcbot.logging.NullHandler())
-    log.propagate = False
-    return mcbot.MCBot(cfg, log)
+from management import MgmtError
 
 
 async def meta(bot):
@@ -41,76 +13,46 @@ async def meta(bot):
     return row["value"] if row else None
 
 
-async def test_seed_from_config_when_db_empty():
-    print("test_seed_from_config_when_db_empty")
-    bot = make_bot(channel_retry_max=3)
+async def test_seed_from_config_when_db_empty(bot_factory):
+    bot = bot_factory(channel_retry_max=3)
     await bot.load_runtime_settings()
-    check(bot.channel_retry_max == 3, "seeded retries from config")
-    check(await meta(bot) == "3", "config value written to bot_meta")
-    bot.db.close()
+    assert bot.channel_retry_max == 3, "seeded retries from config"
+    assert await meta(bot) == "3", "config value written to bot_meta"
 
 
-async def test_db_is_authoritative_over_config():
-    print("test_db_is_authoritative_over_config")
-    bot = make_bot(channel_retry_max=3)
+async def test_db_is_authoritative_over_config(bot_factory):
+    bot = bot_factory(channel_retry_max=3)
     await bot.db.execute(
         "INSERT INTO bot_meta(key,value) VALUES('channel_retry_max','1')"
     )
     await bot.load_runtime_settings()
-    check(bot.channel_retry_max == 1, "DB value wins over config")
-    bot.db.close()
+    assert bot.channel_retry_max == 1, "DB value wins over config"
 
 
-async def test_set_clamps_and_persists():
-    print("test_set_clamps_and_persists")
-    bot = make_bot()
+async def test_set_clamps_and_persists(bot_factory):
+    bot = bot_factory()
     await bot.set_runtime_setting("channel_retry_max", 4)
-    check(bot.channel_retry_max == 4, "in-memory value updated")
-    check(await meta(bot) == "4", "value persisted to bot_meta")
+    assert bot.channel_retry_max == 4, "in-memory value updated"
+    assert await meta(bot) == "4", "value persisted to bot_meta"
     await bot.set_runtime_setting("channel_retry_max", 99)
-    check(bot.channel_retry_max == 5, "clamps above 5")
+    assert bot.channel_retry_max == 5, "clamps above 5"
     await bot.set_runtime_setting("channel_retry_max", -1)
-    check(bot.channel_retry_max == 0, "clamps below 0 (disabled)")
-    bot.db.close()
+    assert bot.channel_retry_max == 0, "clamps below 0 (disabled)"
 
 
-async def test_mgmt_validation_and_audit():
-    print("test_mgmt_validation_and_audit")
-    bot = make_bot()
+async def test_mgmt_validation_and_audit(bot_factory):
+    bot = bot_factory()
     r = await bot.mgmt.setting_set("channel_retry_max", 3)
-    check(r == {"key": "channel_retry_max", "value": 3}, "valid set returns retries")
+    assert r == {"key": "channel_retry_max", "value": 3}
     g = await bot.mgmt.setting_get("channel_retry_max")
-    check(g == {"key": "channel_retry_max", "value": 3}, "get returns current retries")
+    assert g == {"key": "channel_retry_max", "value": 3}
     r0 = await bot.mgmt.setting_set("channel_retry_max", 0)
-    check(r0 == {"key": "channel_retry_max", "value": 0}, "0 disables (accepted)")
+    assert r0 == {"key": "channel_retry_max", "value": 0}, "0 disables (accepted)"
     for bad in (-1, 6, "abc"):
-        try:
+        with pytest.raises(MgmtError):
             await bot.mgmt.setting_set("channel_retry_max", bad)
-            check(False, f"invalid retries {bad!r} should raise")
-        except MgmtError:
-            check(True, f"invalid retries {bad!r} rejected")
     row = await bot.db.fetchone(
         "SELECT detail FROM bot_audit_log WHERE action='command.retry' "
         "ORDER BY id DESC LIMIT 1"
     )
-    check(row is not None and "retries=" in row["detail"], "set is audited")
-    bot.db.close()
-
-
-async def main():
-    for t in (
-        test_seed_from_config_when_db_empty,
-        test_db_is_authoritative_over_config,
-        test_set_clamps_and_persists,
-        test_mgmt_validation_and_audit,
-    ):
-        await t()
-    print()
-    if _failures:
-        print(f"FAILED: {_failures} check(s)")
-        sys.exit(1)
-    print("ALL TESTS PASSED")
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
+    assert row is not None and "retries=" in row["detail"], "set is audited"

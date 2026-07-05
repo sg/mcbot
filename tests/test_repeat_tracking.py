@@ -1,44 +1,21 @@
-#!/usr/bin/env python3
-"""Tests for repeater-repeat tracking in mcbot.py.
-
-Run with a Python that has meshcore + pynacl + pycryptodome installed, e.g.:
-    /home/steve/dev/meshcore/meshcore-bot/venv/bin/python tests/test_repeat_tracking.py
+"""Repeater-repeat tracking.
 
 These build synthetic on-air frames using the SAME crypto helpers the bot uses
-to decrypt them, so the round-trip is self-consistent without real hardware.
-"""
+to decrypt them, so the round-trip is self-consistent without real hardware."""
 
 import asyncio
 import hashlib
 import hmac
 import os
-import sys
-from pathlib import Path
 from types import SimpleNamespace
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import pytest
+from Crypto.Cipher import AES
 
-from Crypto.Cipher import AES  # noqa: E402
-
-import mcbot  # noqa: E402
-from mcbot import (  # noqa: E402
-    Config, MCBot, PayloadType,
-    derive_public_key, derive_shared_secret,
-)
+from mcbot import PayloadType, derive_public_key, derive_shared_secret
 
 GROUP = PayloadType.GROUP_TEXT.value      # 0x05
 TEXT = PayloadType.TEXT_MESSAGE.value     # 0x02
-
-_failures = 0
-
-
-def check(cond, msg):
-    global _failures
-    if cond:
-        print(f"  ok: {msg}")
-    else:
-        _failures += 1
-        print(f"  FAIL: {msg}")
 
 
 def _pad16(b: bytes) -> bytes:
@@ -79,23 +56,21 @@ def rx_payload(pkt, ptype, *, path="ab", path_hash_size=1, pkt_hash=1):
     }
 
 
-def make_bot(*, repeat_tracking=True, repeat_timeout=5.0):
-    cfg = Config()
-    cfg.db_path = Path(":memory:")
-    cfg.repeat_tracking = repeat_tracking
-    cfg.repeat_timeout = repeat_timeout
-    log = mcbot.logging.getLogger("test-repeat")
-    log.addHandler(mcbot.logging.NullHandler())
-    log.propagate = False
-    bot = MCBot(cfg, log)
-    # identity
-    our_priv = os.urandom(64)
-    our_pub = derive_public_key(our_priv)
-    bot.my_private_key = our_priv
-    bot.my_public_key_bytes = our_pub
-    bot.my_pubkey = our_pub.hex()
-    bot.my_pubkey_byte = our_pub[0]
-    return bot, our_priv, our_pub
+@pytest.fixture
+def repeat_bot(bot_factory):
+    """(bot, our_priv, our_pub) with repeat tracking on and a fixed identity."""
+    def make(*, repeat_tracking=True, repeat_timeout=5.0):
+        bot = bot_factory(
+            repeat_tracking=repeat_tracking, repeat_timeout=repeat_timeout,
+        )
+        our_priv = os.urandom(64)
+        our_pub = derive_public_key(our_priv)
+        bot.my_private_key = our_priv
+        bot.my_public_key_bytes = our_pub
+        bot.my_pubkey = our_pub.hex()
+        bot.my_pubkey_byte = our_pub[0]
+        return bot, our_priv, our_pub
+    return make
 
 
 async def count_rows(bot, packet_type):
@@ -106,44 +81,39 @@ async def count_rows(bot, packet_type):
     return row["n"]
 
 
-async def test_channel_round_trip():
-    print("test_channel_round_trip")
-    bot, *_ = make_bot()
+async def test_channel_round_trip(repeat_bot):
+    bot, *_ = repeat_bot()
     secret = os.urandom(16)
     chash = hashlib.sha256(secret).digest()[0]
     bot.channels_by_hash[chash] = (3, "#test", secret)
     w = bot._register_repeat_watch(kind="channel", text="hello", channel_idx=3)
-    check(w is not None, "channel watch registered")
+    assert w is not None, "channel watch registered"
     pkt = build_channel_pkt(secret, "hello", ts=1000)
     await bot._match_repeat(rx_payload(pkt, GROUP, path="ab", pkt_hash=111))
-    check(w.repeat_count == 1, "repeat counted once")
-    check(await count_rows(bot, "REPEAT") == 1, "one REPEAT row emitted")
-    bot.db.close()
+    assert w.repeat_count == 1, "repeat counted once"
+    assert await count_rows(bot, "REPEAT") == 1, "one REPEAT row emitted"
 
 
-async def test_dm_round_trip_and_inversion():
-    print("test_dm_round_trip_and_inversion")
-    bot, our_priv, our_pub = make_bot()
+async def test_dm_round_trip_and_inversion(repeat_bot):
+    bot, our_priv, our_pub = repeat_bot()
     their_priv = os.urandom(64)
     their_pub = derive_public_key(their_priv)
     w = bot._register_repeat_watch(
         kind="dm", text="pong", dest_pubkey=their_pub.hex(), disp_name="bob"
     )
-    check(w is not None and w.dest_byte == their_pub[0], "dm watch registered")
+    assert w is not None and w.dest_byte == their_pub[0], "dm watch registered"
     pkt = build_dm_pkt(our_priv, their_pub, our_pub[0], their_pub[0], "pong", 2000)
     await bot._match_repeat(rx_payload(pkt, TEXT, path="cd", pkt_hash=222))
-    check(w.repeat_count == 1, "dm repeat matched")
+    assert w.repeat_count == 1, "dm repeat matched"
     # inversion: a frame addressed TO us (payload[1] != our byte) must NOT match
     inbound = bytes([our_pub[0], their_pub[0]]) + pkt[2:]
     before = w.repeat_count
     await bot._match_repeat(rx_payload(inbound, TEXT, path="ef", pkt_hash=333))
-    check(w.repeat_count == before, "inbound-to-us frame not counted as repeat")
-    bot.db.close()
+    assert w.repeat_count == before, "inbound-to-us frame not counted as repeat"
 
 
-async def test_multi_repeater_and_frame_dedup():
-    print("test_multi_repeater_and_frame_dedup")
-    bot, *_ = make_bot()
+async def test_multi_repeater_and_frame_dedup(repeat_bot):
+    bot, *_ = repeat_bot()
     secret = os.urandom(16)
     bot.channels_by_hash[hashlib.sha256(secret).digest()[0]] = (1, "#c", secret)
     w = bot._register_repeat_watch(kind="channel", text="hi", channel_idx=1)
@@ -151,29 +121,26 @@ async def test_multi_repeater_and_frame_dedup():
     # same pkt_hash, different path => two distinct repeaters
     await bot._match_repeat(rx_payload(pkt, GROUP, path="ab", pkt_hash=7))
     await bot._match_repeat(rx_payload(pkt, GROUP, path="cd", pkt_hash=7))
-    check(w.repeat_count == 2, "two repeaters counted")
-    check(len(w.repeater_keys) == 2, "two distinct repeater keys")
+    assert w.repeat_count == 2, "two repeaters counted"
+    assert len(w.repeater_keys) == 2, "two distinct repeater keys"
     # exact same (pkt_hash, path) again => deduped
     await bot._match_repeat(rx_payload(pkt, GROUP, path="ab", pkt_hash=7))
-    check(w.repeat_count == 2, "identical frame not double-counted")
-    check(await count_rows(bot, "REPEAT") == 2, "two REPEAT rows total")
-    bot.db.close()
+    assert w.repeat_count == 2, "identical frame not double-counted"
+    assert await count_rows(bot, "REPEAT") == 2, "two REPEAT rows total"
 
 
-async def test_retry_attempts_same_text():
-    print("test_retry_attempts_same_text")
-    bot, *_ = make_bot()
+async def test_retry_attempts_same_text(repeat_bot):
+    bot, *_ = repeat_bot()
     secret = os.urandom(16)
     bot.channels_by_hash[hashlib.sha256(secret).digest()[0]] = (2, "#c", secret)
     w = bot._register_repeat_watch(kind="channel", text="yo", channel_idx=2)
     # two send attempts: same text, different timestamp -> different ciphertext
     p1 = build_channel_pkt(secret, "yo", ts=1)
     p2 = build_channel_pkt(secret, "yo", ts=2)
-    check(p1 != p2, "different attempts produce different ciphertext")
+    assert p1 != p2, "different attempts produce different ciphertext"
     await bot._match_repeat(rx_payload(p1, GROUP, path="ab", pkt_hash=10))
     await bot._match_repeat(rx_payload(p2, GROUP, path="ab", pkt_hash=11))
-    check(w.repeat_count == 2, "both attempts matched by content")
-    bot.db.close()
+    assert w.repeat_count == 2, "both attempts matched by content"
 
 
 def _stub_channel_sender(bot):
@@ -188,41 +155,36 @@ def _stub_channel_sender(bot):
     return sends
 
 
-async def test_channel_send_always_stamps_timestamp():
-    print("test_channel_send_always_stamps_timestamp")
-    bot, *_ = make_bot(repeat_timeout=0.05)
+async def test_channel_send_always_stamps_timestamp(repeat_bot):
+    bot, *_ = repeat_bot(repeat_timeout=0.05)
     bot.channel_retry_max = 0  # explicitly disabled
     sends = _stub_channel_sender(bot)
     await bot.send_channel_text(3, "once")
     await asyncio.sleep(0.25)
-    check(len(sends) == 1, "no retry when channel_retry_max=0")
-    check(sends[0][2] is not None, "send carries an explicit timestamp (dedup key)")
-    check(await count_rows(bot, "RETRY") == 0, "no RETRY rows when disabled")
-    check(await count_rows(bot, "NO_REPEAT") == 1, "NO_REPEAT still emitted")
-    bot.db.close()
+    assert len(sends) == 1, "no retry when channel_retry_max=0"
+    assert sends[0][2] is not None, "send carries an explicit timestamp (dedup key)"
+    assert await count_rows(bot, "RETRY") == 0, "no RETRY rows when disabled"
+    assert await count_rows(bot, "NO_REPEAT") == 1, "NO_REPEAT still emitted"
 
 
-async def test_channel_no_repeat_retry_exhausts():
-    print("test_channel_no_repeat_retry_exhausts")
-    bot, *_ = make_bot(repeat_timeout=0.05)
+async def test_channel_no_repeat_retry_exhausts(repeat_bot):
+    bot, *_ = repeat_bot(repeat_timeout=0.05)
     bot.channel_retry_max = 2
     sends = _stub_channel_sender(bot)
     await bot.send_channel_text(8, "ping")
     await asyncio.sleep(0.5)
-    check(len(sends) == 3, f"original + 2 retries sent (got {len(sends)})")
+    assert len(sends) == 3, f"original + 2 retries sent (got {len(sends)})"
     ts0 = sends[0][2]
-    check(ts0 is not None and all(s[2] == ts0 for s in sends),
-          "every retry reuses the original timestamp")
-    check(all(s[1] == "ping" for s in sends), "text unchanged across retries")
-    check(await count_rows(bot, "RETRY") == 2, "two RETRY rows emitted")
-    check(await count_rows(bot, "NO_REPEAT") == 1,
-          "final NO_REPEAT after retries exhausted")
-    bot.db.close()
+    assert ts0 is not None and all(s[2] == ts0 for s in sends), \
+        "every retry reuses the original timestamp"
+    assert all(s[1] == "ping" for s in sends), "text unchanged across retries"
+    assert await count_rows(bot, "RETRY") == 2, "two RETRY rows emitted"
+    assert await count_rows(bot, "NO_REPEAT") == 1, \
+        "final NO_REPEAT after retries exhausted"
 
 
-async def test_channel_retry_stops_on_repeat():
-    print("test_channel_retry_stops_on_repeat")
-    bot, *_ = make_bot(repeat_timeout=0.1)
+async def test_channel_retry_stops_on_repeat(repeat_bot):
+    bot, *_ = repeat_bot(repeat_timeout=0.1)
     bot.channel_retry_max = 3
     secret = os.urandom(16)
     bot.channels_by_hash[hashlib.sha256(secret).digest()[0]] = (9, "#c", secret)
@@ -233,37 +195,33 @@ async def test_channel_retry_stops_on_repeat():
     pkt = build_channel_pkt(secret, "yo", ts=ts0)
     await bot._match_repeat(rx_payload(pkt, GROUP, path="ab", pkt_hash=55))
     await asyncio.sleep(0.4)
-    check(len(sends) == 1, "no retries once a repeat is heard")
-    check(await count_rows(bot, "REPEAT") == 1, "repeat recorded")
-    check(await count_rows(bot, "NO_REPEAT") == 0, "no NO_REPEAT once repeated")
-    bot.db.close()
+    assert len(sends) == 1, "no retries once a repeat is heard"
+    assert await count_rows(bot, "REPEAT") == 1, "repeat recorded"
+    assert await count_rows(bot, "NO_REPEAT") == 0, "no NO_REPEAT once repeated"
 
 
-async def test_no_repeat_timer():
-    print("test_no_repeat_timer")
-    bot, *_ = make_bot(repeat_timeout=0.05)
+async def test_no_repeat_timer(repeat_bot):
+    bot, *_ = repeat_bot(repeat_timeout=0.05)
     w = bot._register_repeat_watch(kind="channel", text="nope", channel_idx=4)
     bot._start_repeat_timer(w)
     await asyncio.sleep(0.2)
-    check(await count_rows(bot, "NO_REPEAT") == 1, "NO_REPEAT emitted on silence")
-    check(w not in bot._repeat_watches, "watch removed after timeout")
-    bot.db.close()
+    assert await count_rows(bot, "NO_REPEAT") == 1, "NO_REPEAT emitted on silence"
+    assert w not in bot._repeat_watches, "watch removed after timeout"
 
 
-async def test_direct_0hop_label():
-    print("test_direct_0hop_label")
-    bot, _our_priv, _our_pub = make_bot(repeat_timeout=0.05)
+async def test_direct_0hop_label(repeat_bot):
+    bot, _our_priv, _our_pub = repeat_bot(repeat_timeout=0.05)
     their_pub = derive_public_key(os.urandom(64))
     # a 0-hop direct DM has no repeater in its path -> DIRECT_0HOP, not NO_REPEAT
     w = bot._register_repeat_watch(
         kind="dm", text="hi", dest_pubkey=their_pub.hex(),
         disp_name="bob", route_mode="direct_0hop",
     )
-    check(w is not None and w.route_mode == "direct_0hop", "route_mode stored")
+    assert w is not None and w.route_mode == "direct_0hop", "route_mode stored"
     bot._start_repeat_timer(w)
     await asyncio.sleep(0.2)
-    check(await count_rows(bot, "DIRECT_0HOP") == 1, "DIRECT_0HOP row emitted")
-    check(await count_rows(bot, "NO_REPEAT") == 0, "no NO_REPEAT for 0-hop DM")
+    assert await count_rows(bot, "DIRECT_0HOP") == 1, "DIRECT_0HOP row emitted"
+    assert await count_rows(bot, "NO_REPEAT") == 0, "no NO_REPEAT for 0-hop DM"
 
     # a flooded DM with no repeater heard is still a genuine NO_REPEAT
     w2 = bot._register_repeat_watch(
@@ -272,14 +230,12 @@ async def test_direct_0hop_label():
     )
     bot._start_repeat_timer(w2)
     await asyncio.sleep(0.2)
-    check(await count_rows(bot, "NO_REPEAT") == 1, "flood DM -> NO_REPEAT")
-    check(await count_rows(bot, "DIRECT_0HOP") == 1, "flood DM not DIRECT_0HOP")
-    bot.db.close()
+    assert await count_rows(bot, "NO_REPEAT") == 1, "flood DM -> NO_REPEAT"
+    assert await count_rows(bot, "DIRECT_0HOP") == 1, "flood DM not DIRECT_0HOP"
 
 
-async def test_repeat_before_timeout_no_norepeat():
-    print("test_repeat_before_timeout_no_norepeat")
-    bot, *_ = make_bot(repeat_timeout=0.2)
+async def test_repeat_before_timeout_no_norepeat(repeat_bot):
+    bot, *_ = repeat_bot(repeat_timeout=0.2)
     secret = os.urandom(16)
     bot.channels_by_hash[hashlib.sha256(secret).digest()[0]] = (5, "#c", secret)
     w = bot._register_repeat_watch(kind="channel", text="seen", channel_idx=5)
@@ -287,46 +243,40 @@ async def test_repeat_before_timeout_no_norepeat():
     pkt = build_channel_pkt(secret, "seen", ts=9)
     await bot._match_repeat(rx_payload(pkt, GROUP, path="ab", pkt_hash=99))
     await asyncio.sleep(0.3)
-    check(w.repeat_count == 1, "repeat counted")
-    check(await count_rows(bot, "NO_REPEAT") == 0, "no NO_REPEAT when repeated")
-    bot.db.close()
+    assert w.repeat_count == 1, "repeat counted"
+    assert await count_rows(bot, "NO_REPEAT") == 0, "no NO_REPEAT when repeated"
 
 
-async def test_self_echo_suppression():
-    print("test_self_echo_suppression")
-    bot, *_ = make_bot()
+async def test_self_echo_suppression(repeat_bot):
+    bot, *_ = repeat_bot()
     secret = os.urandom(16)
     bot.channels_by_hash[hashlib.sha256(secret).digest()[0]] = (6, "#c", secret)
-    w = bot._register_repeat_watch(kind="channel", text="mine", channel_idx=6)
-    check(bot._matches_active_channel_watch(6, "mine"), "active watch matches")
-    check(not bot._matches_active_channel_watch(6, "other"), "other text no match")
+    bot._register_repeat_watch(kind="channel", text="mine", channel_idx=6)
+    assert bot._matches_active_channel_watch(6, "mine"), "active watch matches"
+    assert not bot._matches_active_channel_watch(6, "other"), "other text no match"
     pkt = build_channel_pkt(secret, "mine", ts=42)
     await bot._handle_inbound_channel(
         pkt, snr=-5.0, rssi=-100, path_hex="ab", path_len=1, path_hash_mode=0
     )
     n = await bot.db.fetchone("SELECT COUNT(*) AS n FROM channel_messages")
-    check(n["n"] == 0, "own repeated channel msg not re-ingested")
-    bot.db.close()
+    assert n["n"] == 0, "own repeated channel msg not re-ingested"
 
 
-async def test_disabled_config():
-    print("test_disabled_config")
-    bot, *_ = make_bot(repeat_tracking=False)
+async def test_disabled_config(repeat_bot):
+    bot, *_ = repeat_bot(repeat_tracking=False)
     w = bot._register_repeat_watch(kind="channel", text="x", channel_idx=1)
-    check(w is None, "register is a no-op when disabled")
-    check(not bot._matches_active_channel_watch(1, "x"), "no match when disabled")
+    assert w is None, "register is a no-op when disabled"
+    assert not bot._matches_active_channel_watch(1, "x"), "no match when disabled"
     secret = os.urandom(16)
     bot.channels_by_hash[hashlib.sha256(secret).digest()[0]] = (1, "#c", secret)
     await bot._match_repeat(
         rx_payload(build_channel_pkt(secret, "x", ts=1), GROUP, pkt_hash=1)
     )
-    check(await count_rows(bot, "REPEAT") == 0, "no REPEAT rows when disabled")
-    bot.db.close()
+    assert await count_rows(bot, "REPEAT") == 0, "no REPEAT rows when disabled"
 
 
-async def test_end_to_end_firehose():
-    print("test_end_to_end_firehose")
-    bot, *_ = make_bot()
+async def test_end_to_end_firehose(repeat_bot):
+    bot, *_ = repeat_bot()
     secret = os.urandom(16)
     bot.channels_by_hash[hashlib.sha256(secret).digest()[0]] = (7, "#c", secret)
     bot._register_repeat_watch(kind="channel", text="e2e", channel_idx=7)
@@ -336,34 +286,5 @@ async def test_end_to_end_firehose():
         type=SimpleNamespace(name="RX_LOG_DATA"), payload=payload, attributes={}
     )
     await bot._firehose(event)
-    check(await count_rows(bot, "RX_LOG") == 1, "base RX_LOG row recorded")
-    check(await count_rows(bot, "REPEAT") == 1, "REPEAT matched via firehose")
-    bot.db.close()
-
-
-async def main():
-    for t in (
-        test_channel_round_trip,
-        test_dm_round_trip_and_inversion,
-        test_multi_repeater_and_frame_dedup,
-        test_retry_attempts_same_text,
-        test_channel_send_always_stamps_timestamp,
-        test_channel_no_repeat_retry_exhausts,
-        test_channel_retry_stops_on_repeat,
-        test_no_repeat_timer,
-        test_direct_0hop_label,
-        test_repeat_before_timeout_no_norepeat,
-        test_self_echo_suppression,
-        test_disabled_config,
-        test_end_to_end_firehose,
-    ):
-        await t()
-    print()
-    if _failures:
-        print(f"FAILED: {_failures} check(s)")
-        sys.exit(1)
-    print("ALL TESTS PASSED")
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
+    assert await count_rows(bot, "RX_LOG") == 1, "base RX_LOG row recorded"
+    assert await count_rows(bot, "REPEAT") == 1, "REPEAT matched via firehose"
