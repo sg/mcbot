@@ -47,7 +47,7 @@ async def meta(bot):
 async def test_seed_from_config_when_db_empty():
     print("test_seed_from_config_when_db_empty")
     bot = make_bot(command_delay=0.3)
-    await bot._load_command_delay()
+    await bot.load_runtime_settings()
     check(bot.command_delay == 0.3, "seeded delay from config")
     check(await meta(bot) == "0.3", "config value written to bot_meta")
     bot.db.close()
@@ -59,7 +59,7 @@ async def test_db_is_authoritative_over_config():
     await bot.db.execute(
         "INSERT INTO bot_meta(key,value) VALUES('command_delay','1.5')"
     )
-    await bot._load_command_delay()
+    await bot.load_runtime_settings()
     check(bot.command_delay == 1.5, "DB value wins over config")
     bot.db.close()
 
@@ -67,12 +67,12 @@ async def test_db_is_authoritative_over_config():
 async def test_set_clamps_and_persists():
     print("test_set_clamps_and_persists")
     bot = make_bot()
-    await bot.set_command_delay(0.5)
+    await bot.set_runtime_setting("command_delay", 0.5)
     check(bot.command_delay == 0.5, "in-memory value updated")
     check(await meta(bot) == "0.5", "value persisted to bot_meta")
-    await bot.set_command_delay(5.0)
+    await bot.set_runtime_setting("command_delay", 5.0)
     check(bot.command_delay == 2.0, "clamps above 2.0")
-    await bot.set_command_delay(-1)
+    await bot.set_runtime_setting("command_delay", -1)
     check(bot.command_delay == 0.0, "clamps below 0 (disabled)")
     bot.db.close()
 
@@ -80,15 +80,15 @@ async def test_set_clamps_and_persists():
 async def test_mgmt_validation_and_audit():
     print("test_mgmt_validation_and_audit")
     bot = make_bot()
-    r = await bot.mgmt.set_command_delay(1.0)
-    check(r == {"delay": 1.0}, "valid set returns delay")
-    g = await bot.mgmt.command_delay()
-    check(g == {"delay": 1.0}, "get returns current delay")
-    r0 = await bot.mgmt.set_command_delay(0)
-    check(r0 == {"delay": 0.0}, "0 disables (accepted)")
+    r = await bot.mgmt.setting_set("command_delay", 1.0)
+    check(r == {"key": "command_delay", "value": 1.0}, "valid set returns delay")
+    g = await bot.mgmt.setting_get("command_delay")
+    check(g == {"key": "command_delay", "value": 1.0}, "get returns current delay")
+    r0 = await bot.mgmt.setting_set("command_delay", 0)
+    check(r0 == {"key": "command_delay", "value": 0.0}, "0 disables (accepted)")
     for bad in (0.05, 2.1, -0.5, "abc"):
         try:
-            await bot.mgmt.set_command_delay(bad)
+            await bot.mgmt.setting_set("command_delay", bad)
             check(False, f"invalid delay {bad!r} should raise")
         except MgmtError:
             check(True, f"invalid delay {bad!r} rejected")
@@ -156,7 +156,7 @@ async def _run_dispatch(bot):
 async def test_dispatch_delays_after_handler_before_send():
     print("test_dispatch_delays_after_handler_before_send")
     bot = make_bot()
-    await bot.set_command_delay(0.5)
+    await bot.set_runtime_setting("command_delay", 0.5)
     events, sleeps = await _run_dispatch(bot)
     check(sleeps == [0.5], f"slept once for command_delay (got {sleeps})")
     check([e[0] for e in events] == ["handle", "sleep", "send"],

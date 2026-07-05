@@ -44,7 +44,7 @@ async def meta(bot):
 async def test_seed_from_config_when_db_empty():
     print("test_seed_from_config_when_db_empty")
     bot = make_bot(channel_retry_max=3)
-    await bot._load_channel_retry_max()
+    await bot.load_runtime_settings()
     check(bot.channel_retry_max == 3, "seeded retries from config")
     check(await meta(bot) == "3", "config value written to bot_meta")
     bot.db.close()
@@ -56,7 +56,7 @@ async def test_db_is_authoritative_over_config():
     await bot.db.execute(
         "INSERT INTO bot_meta(key,value) VALUES('channel_retry_max','1')"
     )
-    await bot._load_channel_retry_max()
+    await bot.load_runtime_settings()
     check(bot.channel_retry_max == 1, "DB value wins over config")
     bot.db.close()
 
@@ -64,12 +64,12 @@ async def test_db_is_authoritative_over_config():
 async def test_set_clamps_and_persists():
     print("test_set_clamps_and_persists")
     bot = make_bot()
-    await bot.set_channel_retry_max(4)
+    await bot.set_runtime_setting("channel_retry_max", 4)
     check(bot.channel_retry_max == 4, "in-memory value updated")
     check(await meta(bot) == "4", "value persisted to bot_meta")
-    await bot.set_channel_retry_max(99)
+    await bot.set_runtime_setting("channel_retry_max", 99)
     check(bot.channel_retry_max == 5, "clamps above 5")
-    await bot.set_channel_retry_max(-1)
+    await bot.set_runtime_setting("channel_retry_max", -1)
     check(bot.channel_retry_max == 0, "clamps below 0 (disabled)")
     bot.db.close()
 
@@ -77,15 +77,15 @@ async def test_set_clamps_and_persists():
 async def test_mgmt_validation_and_audit():
     print("test_mgmt_validation_and_audit")
     bot = make_bot()
-    r = await bot.mgmt.set_channel_retry(3)
-    check(r == {"retries": 3}, "valid set returns retries")
-    g = await bot.mgmt.channel_retry()
-    check(g == {"retries": 3}, "get returns current retries")
-    r0 = await bot.mgmt.set_channel_retry(0)
-    check(r0 == {"retries": 0}, "0 disables (accepted)")
+    r = await bot.mgmt.setting_set("channel_retry_max", 3)
+    check(r == {"key": "channel_retry_max", "value": 3}, "valid set returns retries")
+    g = await bot.mgmt.setting_get("channel_retry_max")
+    check(g == {"key": "channel_retry_max", "value": 3}, "get returns current retries")
+    r0 = await bot.mgmt.setting_set("channel_retry_max", 0)
+    check(r0 == {"key": "channel_retry_max", "value": 0}, "0 disables (accepted)")
     for bad in (-1, 6, "abc"):
         try:
-            await bot.mgmt.set_channel_retry(bad)
+            await bot.mgmt.setting_set("channel_retry_max", bad)
             check(False, f"invalid retries {bad!r} should raise")
         except MgmtError:
             check(True, f"invalid retries {bad!r} rejected")

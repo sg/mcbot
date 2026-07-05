@@ -29,6 +29,7 @@ import time
 from typing import Any, Optional
 
 from protocol import CONTACT_TYPE_NAMES
+from settings import SETTINGS, RuntimeSetting
 
 
 class MgmtError(Exception):
@@ -530,56 +531,51 @@ class Management:
         )
         return {"changed": True, "channels": chans}
 
-    async def command_delay(
+    # ==================================================================
+    # Runtime settings (registry-driven; see settings.SETTINGS)
+    # ==================================================================
+    def _setting(self, key: str) -> RuntimeSetting:
+        s = SETTINGS.get(key)
+        if s is None:
+            raise MgmtError(f"unknown setting: {key!r}", "not_found")
+        return s
+
+    async def setting_list(
         self, *, actor_pubkey=None, actor_name=None,
-    ) -> dict:
-        """Current delay (seconds) applied before sending command responses
-        (0 = disabled). Read-only, not audited."""
-        return {"delay": self.bot.command_delay}
+    ) -> list:
+        """All runtime settings: registry metadata plus the live value.
+        Read-only, not audited."""
+        return [
+            {**s.describe(), "value": getattr(self.bot, s.key)}
+            for s in SETTINGS.values()
+        ]
 
-    async def set_command_delay(
-        self, seconds, *, actor_pubkey=None, actor_name=None,
+    async def setting_get(
+        self, key, *, actor_pubkey=None, actor_name=None,
     ) -> dict:
-        """Set the pre-send command-response delay in seconds: 0 to disable, or
-        0.1–2.0. Persists to the database. Audited as 'command.delay'."""
+        """Current value of one runtime setting. Read-only, not audited."""
+        s = self._setting(key)
+        return {"key": s.key, "value": getattr(self.bot, s.key)}
+
+    async def setting_set(
+        self, key, value, *, actor_pubkey=None, actor_name=None,
+    ) -> dict:
+        """Validate, apply, and persist a runtime setting. Audited under the
+        setting's registry action name."""
+        s = self._setting(key)
         try:
-            seconds = float(seconds)
+            v = s.parse(value)
         except (TypeError, ValueError):
-            raise MgmtError("delay must be a number of seconds", "invalid")
-        if seconds != 0 and not (0.1 <= seconds <= 2.0):
-            raise MgmtError("delay must be 0 (off) or between 0.1 and 2.0", "invalid")
-        await self.bot.set_command_delay(seconds)
+            raise MgmtError(s.parse_error(), "invalid")
+        err = s.validate(v)
+        if err:
+            raise MgmtError(err, "invalid")
+        v = await self.bot.set_runtime_setting(s.key, v)
         await self._audit(
-            actor_pubkey, actor_name, "command.delay", None,
-            f"delay={self.bot.command_delay:.1f}s",
+            actor_pubkey, actor_name, s.audit_action, None,
+            s.audit_detail.format(v=v),
         )
-        return {"delay": self.bot.command_delay}
-
-    async def channel_retry(
-        self, *, actor_pubkey=None, actor_name=None,
-    ) -> dict:
-        """Current no-repeat channel resend budget (0 = disabled). Read-only,
-        not audited."""
-        return {"retries": self.bot.channel_retry_max}
-
-    async def set_channel_retry(
-        self, count, *, actor_pubkey=None, actor_name=None,
-    ) -> dict:
-        """Set how many times a channel message with no repeat heard is resent
-        (0 to disable, max 5). Persists to the database. Audited as
-        'command.retry'."""
-        try:
-            count = int(count)
-        except (TypeError, ValueError):
-            raise MgmtError("retries must be a whole number", "invalid")
-        if not (0 <= count <= 5):
-            raise MgmtError("retries must be between 0 and 5", "invalid")
-        await self.bot.set_channel_retry_max(count)
-        await self._audit(
-            actor_pubkey, actor_name, "command.retry", None,
-            f"retries={self.bot.channel_retry_max}",
-        )
-        return {"retries": self.bot.channel_retry_max}
+        return {"key": s.key, "value": v}
 
     # ==================================================================
     # SQL console (web Database tab) + saved queries
@@ -736,32 +732,6 @@ class Management:
             "flood" if flood else "zero",
         )
         return {"flood": flood, "ok": ok}
-
-    async def radio_advert_interval(
-        self, *, actor_pubkey=None, actor_name=None,
-    ) -> dict:
-        """Current periodic flood-advert interval (hours; 0 = disabled).
-        Read-only, not audited."""
-        return {"interval_hours": self.bot.advert_interval_hours}
-
-    async def radio_set_advert_interval(
-        self, interval_hours,
-        *, actor_pubkey=None, actor_name=None,
-    ) -> dict:
-        """Set the periodic flood-advert interval in hours (0 = disabled).
-        Persists to the database. Audited as 'radio.advert_interval'."""
-        try:
-            interval_hours = int(interval_hours)
-        except (TypeError, ValueError):
-            raise MgmtError("interval must be a whole number of hours", "invalid")
-        if not (0 <= interval_hours <= 168):
-            raise MgmtError("interval must be between 0 and 168 hours", "invalid")
-        await self.bot.set_advert_interval(interval_hours)
-        await self._audit(
-            actor_pubkey, actor_name, "radio.advert_interval", None,
-            f"interval={interval_hours}h",
-        )
-        return {"interval_hours": self.bot.advert_interval_hours}
 
     # ==================================================================
     # Radio contact-table rollover

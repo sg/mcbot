@@ -72,6 +72,7 @@ _HELP = [
     ("radio key <128-hex>",              "import a private key — CHANGES the node's identity"),
     ("advert <flood|zero>",              "send a flood or zero-hop advertisement"),
     ("advert interval <hours>",          "send a flood advert every N hours (0 disables)"),
+    ("setting [key] [value]",            "list/show/set any runtime setting"),
     ("status",                           "bot health and runtime stats"),
     ("reload",                           "rescan commands/ and reload plugins"),
     ("restart",                          "full teardown + reinit (re-reads config)"),
@@ -677,10 +678,12 @@ async def _command_delay(ctx, rest):
     except ValueError:
         return f"Invalid delay: {arg!r}. Use seconds (0, or 0.1–2.0)."
     try:
-        res = await ctx.bot.mgmt.set_command_delay(seconds, **_actor(ctx))
+        res = await ctx.bot.mgmt.setting_set(
+            "command_delay", seconds, **_actor(ctx)
+        )
     except MgmtError as e:
         return e.message
-    d = res["delay"]
+    d = res["value"]
     if d == 0:
         return "Command response delay disabled"
     return f"Command response delay set to {d:.1f}s"
@@ -700,10 +703,12 @@ async def _command_retry(ctx, rest):
     except ValueError:
         return f"Invalid retry count: {arg!r}. Use a whole number (0–5)."
     try:
-        res = await ctx.bot.mgmt.set_channel_retry(count, **_actor(ctx))
+        res = await ctx.bot.mgmt.setting_set(
+            "channel_retry_max", count, **_actor(ctx)
+        )
     except MgmtError as e:
         return e.message
-    n = res["retries"]
+    n = res["value"]
     if n == 0:
         return "Channel no-repeat retry disabled"
     return f"Channel no-repeat retries set to {n}"
@@ -904,10 +909,12 @@ async def _cmd_advert(ctx, rest):
         except ValueError:
             return f"Invalid interval: {parts[1]!r}. Use a whole number of hours."
         try:
-            res = await ctx.bot.mgmt.radio_set_advert_interval(hours, **_actor(ctx))
+            res = await ctx.bot.mgmt.setting_set(
+                "advert_interval_hours", hours, **_actor(ctx)
+            )
         except MgmtError as e:
             return e.message
-        n = res["interval_hours"]
+        n = res["value"]
         if n == 0:
             return "Periodic flood advert disabled"
         return f"Flood advert every {n}h"
@@ -919,6 +926,28 @@ async def _cmd_advert(ctx, rest):
     except MgmtError as e:
         return e.message
     return f"Sent {'flood' if flood else 'zero-hop'} advert"
+
+
+async def _cmd_setting(ctx, rest):
+    # generic accessor for registry settings; friendly aliases like
+    # '!adm command delay' remain and route through the same registry.
+    parts = rest.split(maxsplit=1)
+    if not parts:
+        rows = await ctx.bot.mgmt.setting_list(**_actor(ctx))
+        return "\n".join(
+            f"{s['key']} = {s['value']}{' ' + s['unit'] if s['unit'] else ''}"
+            f" (0–{s['max']:g})"
+            for s in rows
+        )
+    key = parts[0].lower()
+    try:
+        if len(parts) == 1:
+            res = await ctx.bot.mgmt.setting_get(key, **_actor(ctx))
+            return f"{res['key']} = {res['value']}"
+        res = await ctx.bot.mgmt.setting_set(key, parts[1].strip(), **_actor(ctx))
+    except MgmtError as e:
+        return e.message
+    return f"{res['key']} set to {res['value']}"
 
 
 async def _cmd_status(ctx, _):
@@ -1047,6 +1076,7 @@ _SUBCOMMANDS = {
     "command":  _cmd_command,
     "radio":    _cmd_radio,
     "advert":   _cmd_advert,
+    "setting":  _cmd_setting,
     "status":   _cmd_status,
     "reload":   _cmd_reload,
     "restart":  _cmd_restart,

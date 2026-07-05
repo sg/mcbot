@@ -500,73 +500,26 @@ async def radio_contacts_policy(
         raise http_for_mgmt(e)
 
 
-@router.get("/radio/advert-interval")
-async def radio_advert_interval(
+# --- runtime settings (registry-driven; see settings.SETTINGS) -------------
+@router.get("/settings")
+async def settings_list(
     bot=Depends(get_bot), identity: str = Depends(require_auth),
 ):
-    return await bot.mgmt.radio_advert_interval(**actor_kwargs(identity))
+    return await bot.mgmt.setting_list(**actor_kwargs(identity))
 
 
-class AdvertIntervalBody(BaseModel):
-    interval_hours: int = 0
+class SettingValueBody(BaseModel):
+    value: float
 
 
-@router.post("/radio/advert-interval")
-async def radio_set_advert_interval(
-    body: AdvertIntervalBody,
-    bot=Depends(get_bot), identity: str = Depends(require_auth),
-):
-    try:
-        return await bot.mgmt.radio_set_advert_interval(
-            body.interval_hours, **actor_kwargs(identity),
-        )
-    except MgmtError as e:
-        raise http_for_mgmt(e)
-
-
-@router.get("/command-delay")
-async def command_delay(
-    bot=Depends(get_bot), identity: str = Depends(require_auth),
-):
-    return await bot.mgmt.command_delay(**actor_kwargs(identity))
-
-
-class CommandDelayBody(BaseModel):
-    delay: float = 0.0
-
-
-@router.post("/command-delay")
-async def set_command_delay(
-    body: CommandDelayBody,
+@router.put("/settings/{key}")
+async def setting_set(
+    key: str, body: SettingValueBody,
     bot=Depends(get_bot), identity: str = Depends(require_auth),
 ):
     try:
-        return await bot.mgmt.set_command_delay(
-            body.delay, **actor_kwargs(identity),
-        )
-    except MgmtError as e:
-        raise http_for_mgmt(e)
-
-
-@router.get("/command-retry")
-async def command_retry(
-    bot=Depends(get_bot), identity: str = Depends(require_auth),
-):
-    return await bot.mgmt.channel_retry(**actor_kwargs(identity))
-
-
-class CommandRetryBody(BaseModel):
-    retries: int = 0
-
-
-@router.post("/command-retry")
-async def set_command_retry(
-    body: CommandRetryBody,
-    bot=Depends(get_bot), identity: str = Depends(require_auth),
-):
-    try:
-        return await bot.mgmt.set_channel_retry(
-            body.retries, **actor_kwargs(identity),
+        return await bot.mgmt.setting_set(
+            key, body.value, **actor_kwargs(identity),
         )
     except MgmtError as e:
         raise http_for_mgmt(e)
