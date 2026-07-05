@@ -379,6 +379,36 @@ WantedBy=multi-user.target
 `!adm restart` schedules teardown ~5 seconds after the acknowledgment
 reply so the ACK has time to be sent and confirmed before the disconnect.
 
+### Radio reconnection (radio reboot / power-cycle / link loss)
+
+The bot recovers from a lost radio link automatically, in three layers:
+
+1. **Library auto-reconnect** (first line): the meshcore library retries the
+   transport 3 times over ~3 seconds and re-sends `APP_START` on success.
+   This covers sub-second blips; on success the bot refreshes `self_info`
+   and re-syncs contacts.
+2. **Full restart with backoff**: anything longer (a radio reboot takes
+   5-60s) exhausts the library's retries, and the bot then tears down and
+   rebuilds through the same path as `!adm restart` -- a complete startup
+   resync. If the radio is still unreachable, it keeps retrying with capped
+   exponential backoff (5s doubling to 60s, forever) instead of exiting, so
+   it also rides out long outages without help from systemd.
+3. **Watchdog probe** (`watchdog_interval`, default 180s, 0 = off): every N
+   seconds the bot sends a device query; two consecutive missed replies
+   trigger the full restart. This is what catches the TCP half-open case --
+   a silently power-cycled radio on WiFi never signals a disconnect, and an
+   idle bot might otherwise not notice for hours. On USB serial, disconnects
+   are detected immediately by the OS, so the watchdog is just a backstop.
+   Runtime-managed like other settings (`!adm setting watchdog_interval N`
+   or web Manage->Radio).
+
+For USB serial, prefer a `/dev/serial/by-id/...` device path in `[radio]`
+serial_port -- it is stable across re-enumeration, while `/dev/ttyACM0` can
+come back under a different name after a radio reboot.
+
+A clean `Ctrl-C` / `SIGTERM` always wins over a pending reconnect: signals
+end the process even if a restart or backoff wait is in progress.
+
 ---
 
 ## 5. Day-to-Day Management

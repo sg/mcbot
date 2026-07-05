@@ -135,9 +135,12 @@ def parse_args(argv=None):
 
 
 async def amain(argv=None) -> int:
-    # outer loop so '!adm restart' can fully tear down and rebuild without
-    # exiting the process. on normal shutdown (Ctrl-C, SIGTERM) we exit
-    # after the first iteration.
+    # outer loop so '!adm restart' and radio-loss recovery can fully tear
+    # down and rebuild without exiting the process. on normal shutdown
+    # (Ctrl-C, SIGTERM) we exit after the current iteration — signals set
+    # shutdown_event, which overrides any pending internal restart.
+    shutdown_event = asyncio.Event()
+    backoff = 5.0
     while True:
         args = parse_args(argv)
         cfg = load_config(args)
@@ -148,6 +151,7 @@ async def amain(argv=None) -> int:
 
         def _signal_handler():
             log.info("signal received, stopping")
+            shutdown_event.set()
             bot.stop_event.set()
 
         for sig in (signal.SIGINT, signal.SIGTERM):
@@ -157,8 +161,20 @@ async def amain(argv=None) -> int:
                 pass
 
         rc = await bot.run()
-        if not bot.restart_requested:
+        if shutdown_event.is_set() or not bot.restart_requested:
             return rc
+        if bot.connect_failed:
+            # radio unreachable (rebooting / unplugged / WiFi down): retry
+            # with capped exponential backoff instead of hammering or exiting.
+            log.warning("radio unavailable — retrying connect in %.0fs", backoff)
+            try:
+                await asyncio.wait_for(shutdown_event.wait(), timeout=backoff)
+                return rc
+            except asyncio.TimeoutError:
+                pass
+            backoff = min(backoff * 2, 60.0)
+        else:
+            backoff = 5.0
         log.info("=" * 60)
         log.info("RESTART: reinitializing from fresh config")
         log.info("=" * 60)

@@ -103,6 +103,20 @@ SETTINGS = {s.key: s for s in (
         ),
     ),
     RuntimeSetting(
+        key="watchdog_interval", kind=int, max=3600,
+        nonzero_min=30, clamp_max=3600,
+        label="Radio watchdog interval", unit="seconds", group="radio",
+        audit_action="radio.watchdog", audit_detail="watchdog={v}s",
+        description=(
+            "0 = disabled, otherwise 30–3600s. Every N seconds the bot pings "
+            "the radio with a device query; two consecutive missed replies "
+            "trigger a full reconnect/resync. Catches silently dead TCP links "
+            "(e.g. after a radio power-cycle) that never signal a disconnect. "
+            "Persists in the database (mcbot.conf only seeds the first-run "
+            "default)."
+        ),
+    ),
+    RuntimeSetting(
         key="channel_retry_max", kind=int, max=5, clamp_max=5,
         label="Channel resend on no-repeat", unit="", group="commands",
         audit_action="command.retry", audit_detail="retries={v}",
