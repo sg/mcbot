@@ -92,6 +92,10 @@ class MCBot:
         # set true by !adm restart to make amain() loop and rebuild a
         # fresh MCBot instance rather than exiting after shutdown.
         self.restart_requested: bool = False
+        # set when the startup connect fails and auto_reconnect is on, so
+        # amain() retries with backoff instead of exiting the process.
+        self.connect_failed: bool = False
+        self._reconnect_restart_armed = False
         self.my_private_key: Optional[bytes] = None  # 64 bytes
         self.my_public_key_bytes: Optional[bytes] = None  # 32 bytes
         # web admin UI/API (uvicorn server + its serve() task), or None
@@ -1748,12 +1752,77 @@ class MCBot:
         self.logger.info(
             "radio %s", "RECONNECTED" if reconnected else "CONNECTED"
         )
+        if reconnected:
+            # the library re-established the transport in place (short blip)
+            # and already re-sent APP_START; refresh whatever the radio may
+            # have changed across its restart and force a contact re-sync.
+            self._contacts_dirty = True
+            try:
+                await self.refresh_self_info()
+            except Exception:
+                self.logger.exception("post-reconnect self_info refresh failed")
+
+    def _trigger_reconnect_restart(self, why: str) -> None:
+        # recover the radio link with a full teardown + rebuild via the
+        # amain() outer loop (same path as '!adm restart'), so recovery is
+        # always a complete, well-tested startup resync.
+        if self.stop_event.is_set() or self._reconnect_restart_armed:
+            return
+        self._reconnect_restart_armed = True
+        self.logger.warning(
+            "radio link lost (%s) — restarting to reconnect", why
+        )
+        self.restart_requested = True
+        self.stop_event.set()
 
     async def _on_disconnected(self, event) -> None:
         reason = None
         if event and isinstance(event.payload, dict):
             reason = event.payload.get("reason")
         self.logger.warning("radio DISCONNECTED reason=%s", reason)
+        # "manual_disconnect" is our own shutdown/restart teardown. Anything
+        # else means the library has given up (it only emits DISCONNECTED
+        # once auto-reconnect is exhausted — 3 attempts over ~3s — or off),
+        # so without action here the bot would sit dead forever.
+        if reason != "manual_disconnect":
+            self._trigger_reconnect_restart(f"disconnect: {reason}")
+
+    async def _watchdog_runner(self) -> None:
+        # Periodic link-liveness probe. A silently power-cycled radio on TCP
+        # leaves a half-open socket that never raises connection_lost, and an
+        # idle bot may not send for hours — so the dead link would go
+        # unnoticed. The probe forces traffic; two consecutive silent probes
+        # trigger the reconnect/restart path. Interval is a runtime setting
+        # (watchdog_interval, 0 = disabled), re-read every cycle.
+        misses = 0
+        while not self.stop_event.is_set():
+            interval = self.watchdog_interval or 0
+            wait = interval if interval > 0 else 60.0
+            try:
+                await asyncio.wait_for(self.stop_event.wait(), timeout=wait)
+                return
+            except asyncio.TimeoutError:
+                pass
+            if interval <= 0 or self.mc is None:
+                continue
+            try:
+                ev = await asyncio.wait_for(
+                    self.mc.commands.send_device_query(), timeout=10.0
+                )
+                # any reply — even ERROR — proves the link is alive
+                ok = ev is not None
+            except Exception:
+                ok = False
+            if ok:
+                misses = 0
+                continue
+            misses += 1
+            self.logger.warning(
+                "watchdog: radio unresponsive to device query (%d/2)", misses
+            )
+            if misses >= 2:
+                self._trigger_reconnect_restart("watchdog: radio unresponsive")
+                return
 
     # command dispatch
     async def _dispatch_command(self, ctx: CommandContext) -> None:
@@ -2642,6 +2711,11 @@ class MCBot:
         except Exception:
             self.logger.exception("connect failed (%s)", self.cfg.target_desc())
             self.db.close()
+            if self.cfg.auto_reconnect:
+                # radio likely rebooting/unplugged: have amain() rebuild and
+                # retry with backoff rather than exiting the process.
+                self.connect_failed = True
+                self.restart_requested = True
             return 1
 
         # undo MeshCore.__init__'s override so [logging] log_level wins
@@ -2816,6 +2890,7 @@ class MCBot:
 
         periodic_task = asyncio.create_task(periodic_contacts())
         advert_task = asyncio.create_task(periodic_advert())
+        watchdog_task = asyncio.create_task(self._watchdog_runner())
 
         self._start_web()
 
@@ -2823,7 +2898,7 @@ class MCBot:
         try:
             await self.stop_event.wait()
         finally:
-            await self.shutdown([periodic_task, advert_task])
+            await self.shutdown([periodic_task, advert_task, watchdog_task])
         return 0
 
     def _start_web(self) -> None:

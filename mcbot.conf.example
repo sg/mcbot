@@ -151,6 +151,16 @@ owner_pubkeys = 0000000000000000000000000000000000000000000000000000000000000000
 ; command delay N' or the web Manage->Commands page (persists across restarts).
 ;command_delay = 0
 
+; Radio-link watchdog interval in seconds (0 = disabled; otherwise 30-3600).
+; Every N seconds the bot pings the radio with a device query; two consecutive
+; missed replies trigger a full reconnect/resync. This catches silently dead
+; TCP links (e.g. after a radio power-cycle, which often leaves a half-open
+; socket that never signals a disconnect). On USB serial, disconnects are
+; detected immediately, so the watchdog is just a backstop there. FIRST-RUN
+; SEED only: copied into the database on first start, then runtime-managed via
+; '!adm setting watchdog_interval N' or the web Manage->Radio page.
+;watchdog_interval = 180
+
 ; Environment variables for the bot and command scripts.
 ; Each key here is exported into the process environment at startup, so
 ; command scripts can read it via os.environ (e.g. commands/pws.py reads

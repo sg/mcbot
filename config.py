@@ -106,6 +106,13 @@ class Config:
     # bot_meta, then the DB value is authoritative and runtime-managed (via
     # '!adm command delay N' and the web Manage->Commands page).
     command_delay: float = 0.0
+    # Radio-link watchdog interval in seconds (0 = disabled). Every N seconds
+    # the bot pings the radio with a device query; two consecutive missed
+    # replies trigger a full reconnect/resync. Catches silently dead TCP links
+    # (e.g. a power-cycled radio) that never signal a disconnect. SEED only:
+    # first run writes it to bot_meta, then the DB value is authoritative and
+    # runtime-managed ('!adm setting watchdog_interval N' / web Manage->Radio).
+    watchdog_interval: int = 180
     # --- web admin UI / API ([web] section) ---
     web_enabled: bool = False
     web_host: str = "127.0.0.1" # 0.0.0.0 to expose on all interfaces
@@ -141,7 +148,8 @@ _KNOWN_CONFIG_KEYS = {
             "dm_max_flood_attempts", "radio_evict_enabled",
             "radio_evict_headroom", "radio_evict_max_per_run",
             "radio_evict_min_interval", "radio_evict_protect_types",
-            "advert_interval_hours", "command_delay", "owner_pubkeys"},
+            "advert_interval_hours", "command_delay", "watchdog_interval",
+            "owner_pubkeys"},
     "web": {"enabled", "host", "port", "admin_user", "admin_password_hash",
             "session_secret", "cors_origins", "api_tokens", "tls_cert",
             "tls_key"},
@@ -272,6 +280,9 @@ def load_config(args) -> Config:
             cfg.command_delay = min(2.0, max(0.0, parser["bot"].getfloat(
                 "command_delay", cfg.command_delay
             )))
+            cfg.watchdog_interval = max(0, parser["bot"].getint(
+                "watchdog_interval", cfg.watchdog_interval
+            ))
             protect_raw = parser["bot"].get("radio_evict_protect_types", "")
             if protect_raw.strip():
                 cfg.radio_evict_protect_types = parse_contact_types(
