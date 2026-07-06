@@ -859,11 +859,22 @@ async def _radio_advloc(ctx, args):
 
 
 async def _radio_reboot(ctx, args):
-    try:
-        await ctx.bot.mgmt.radio_reboot(**_actor(ctx))
-    except MgmtError as e:
-        return e.message
-    return "radio rebooting… (the bot will reconnect)"
+    bot = ctx.bot
+    actor = _actor(ctx)
+
+    # defer the reboot so this acknowledgment has time to be sent (and
+    # ACKed) before the radio drops the link — mirrors '!adm restart'.
+    # Rebooting inline made the reply DM race the dying serial port
+    # (fatal-write-error tracebacks, reply only delivered via retry).
+    async def _trigger():
+        await asyncio.sleep(5.0)
+        try:
+            await bot.mgmt.radio_reboot(**actor)
+        except Exception:
+            bot.logger.exception("deferred radio reboot failed")
+
+    asyncio.create_task(_trigger())
+    return "radio rebooting in ~5s… (the bot will auto-reconnect)"
 
 
 async def _radio_key(ctx, args):

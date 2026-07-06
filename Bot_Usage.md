@@ -409,6 +409,12 @@ come back under a different name after a radio reboot.
 A clean `Ctrl-C` / `SIGTERM` always wins over a pending reconnect: signals
 end the process even if a restart or backoff wait is in progress.
 
+Note: when the radio drops mid-write (reboot, unplug), the serial transport
+may log an `ERROR ... Fatal write error on serial transport` traceback from
+the asyncio/pyserial layer. That line is expected and benign — it is the
+event that starts the reconnect; watch for `radio RECONNECTED` (or the
+restart/backoff messages) right after it.
+
 ---
 
 ## 5. Day-to-Day Management
@@ -1165,7 +1171,8 @@ first run, after which the DB copy is authoritative and survives restarts.
 !adm radio preset [region]      list, or apply a region preset (freq/bw/sf/cr)
 !adm radio location <lat> <lon> set the node's coordinates
 !adm radio advloc <on|off>      include the node's location in adverts
-!adm radio reboot               reboot the radio (the bot reconnects)
+!adm radio reboot               reboot the radio ~5s after the reply is
+                                sent (the bot auto-reconnects)
 !adm radio key <128-hex>        import a private key — CHANGES the node identity
 ```
 
