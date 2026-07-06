@@ -293,7 +293,12 @@ class MCBot:
                     adv_lat=excluded.adv_lat, adv_lon=excluded.adv_lon,
                     last_advert=excluded.last_advert,
                     lastmod=excluded.lastmod,
-                    last_synced_at=excluded.last_synced_at""",
+                    last_synced_at=CASE
+                        WHEN COALESCE(contacts.lastmod, -1)
+                             <> COALESCE(excluded.lastmod, -1)
+                        THEN excluded.last_synced_at
+                        ELSE contacts.last_synced_at
+                    END""",
                 (
                     pk.lower(),
                     c.get("adv_name"),
@@ -315,7 +320,15 @@ class MCBot:
         new_lastmod = None
         if hasattr(ev, "attributes") and isinstance(ev.attributes, dict):
             new_lastmod = ev.attributes.get("lastmod")
-        if new_lastmod is not None:
+        # advance-only: an incremental response with no changed contacts
+        # carries lastmod=0 in its CONTACT_END frame; writing that would
+        # reset the watermark and turn the NEXT sync into a full dump
+        # (rewriting every contact and flattening last_synced_at ages).
+        try:
+            new_lastmod = int(new_lastmod)
+        except (TypeError, ValueError):
+            new_lastmod = None
+        if new_lastmod is not None and new_lastmod > lastmod:
             await self.db.execute(
                 "INSERT INTO bot_meta(key,value) VALUES('contacts_lastmod',?) "
                 "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
