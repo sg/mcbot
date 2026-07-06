@@ -26,6 +26,11 @@ class CommandSpec:
     # must be cryptographically anchored to a private key (i.e. sensitive
     # commands), since channel sender names are spoofable.
     dm_only: bool = False
+    # PROCESS_QUEUED=True means the command also runs for messages the radio
+    # queued while the bot was offline (drained on startup). Default False:
+    # replying to hours-old commands in rapid fire is usually noise, and
+    # queued messages carry no routing path (so e.g. !path would be wrong).
+    process_queued: bool = False
     # The imported plugin module, kept so commands like !help can read
     # optional module attributes (HELP_DETAIL, HELP_HIDDEN).
     module: Any = None
@@ -104,6 +109,7 @@ class CommandLoader:
             handle=mod.handle,
             module_name=path.stem,
             dm_only=bool(getattr(mod, "DM_ONLY", False)),
+            process_queued=bool(getattr(mod, "PROCESS_QUEUED", False)),
             module=mod,
         )
         self.commands[name] = cs
@@ -140,3 +146,6 @@ class CommandContext:
     rssi: Optional[int]
     sender_timestamp: Optional[int]
     bot: Any  # MCBot
+    # True when this message came from the radio's offline backlog (fetched
+    # during the startup queue drain, before the first NO_MORE_MSGS).
+    from_queue: bool = False

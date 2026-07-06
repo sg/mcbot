@@ -65,7 +65,9 @@ function removeCommandChannel(row, channel) {
       <thead>
         <tr>
           <th>command</th><th>enabled</th><th>allow_dm</th>
-          <th>dm_only</th><th>cooldown</th>
+          <th>dm_only</th>
+          <th title="Also run for commands the radio queued while the bot was offline (drained on startup). Off = ignore them: they arrive hours late in a burst and carry no routing path.">queued</th>
+          <th>cooldown</th>
           <th style="width: 140px">allow channel</th>
           <th>allowed channels</th>
         </tr>
@@ -76,6 +78,7 @@ function removeCommandChannel(row, channel) {
           <td><input type="checkbox" :checked="!!r.enabled" @change="patchCommand(r.command, { enabled: $event.target.checked })" /></td>
           <td><input type="checkbox" :checked="!!r.allow_dm" @change="patchCommand(r.command, { allow_dm: $event.target.checked })" /></td>
           <td><input type="checkbox" :checked="!!r.dm_only" @change="patchCommand(r.command, { dm_only: $event.target.checked })" /></td>
+          <td><input type="checkbox" :checked="!!r.process_queued" @change="patchCommand(r.command, { process_queued: $event.target.checked })" /></td>
           <td><input type="number" :value="r.cooldown_seconds" style="width: 64px" @change="patchCommand(r.command, { cooldown_seconds: Number($event.target.value) })" /></td>
           <td>
             <select @change="addCommandChannel(r, $event.target.value); $event.target.value = ''">

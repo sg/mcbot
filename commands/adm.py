@@ -618,6 +618,8 @@ async def _command_list(ctx, _):
             flags.append("no-dm")
         if cs.dm_only:
             flags.append("dm-only")
+        if cs.process_queued:
+            flags.append("queued-ok")
         flags.append("ch=" + (",".join(chans) if chans else "any"))
         out.append(f"  {cs.name}: {','.join(flags)}")
     return out

@@ -427,7 +427,7 @@ class Management:
     # ==================================================================
     # Command config
     # ==================================================================
-    _CFG_BOOL = ("enabled", "allow_dm", "dm_only")
+    _CFG_BOOL = ("enabled", "allow_dm", "dm_only", "process_queued")
     _CFG_INT = ("cooldown_seconds",)
 
     async def command_config_update(

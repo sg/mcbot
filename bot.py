@@ -96,6 +96,13 @@ class MCBot:
         # amain() retries with backoff instead of exiting the process.
         self.connect_failed: bool = False
         self._reconnect_restart_armed = False
+        # startup queue drain: messages the radio queued while the bot was
+        # offline are fetched between start_auto_message_fetching() and the
+        # first NO_MORE_MSGS. True outside that window (default True so
+        # directly-driven bots, e.g. in tests, treat messages as live).
+        self._radio_queue_drained: bool = True
+        self._drain_deadline: float = 0.0
+        self._queued_cmds_skipped = 0
         self.my_private_key: Optional[bytes] = None  # 64 bytes
         self.my_public_key_bytes: Optional[bytes] = None  # 32 bytes
         # web admin UI/API (uvicorn server + its serve() task), or None
@@ -1033,6 +1040,7 @@ class MCBot:
                 rssi=None,
                 sender_timestamp=sender_timestamp,
                 bot=self,
+                from_queue=self._is_from_queue(),
             )
             await self._dispatch_command(ctx)
 
@@ -1154,6 +1162,7 @@ class MCBot:
                 rssi=rssi,
                 sender_timestamp=sender_timestamp,
                 bot=self,
+                from_queue=self._is_from_queue(),
             )
             await self._dispatch_command(ctx)
 
@@ -1377,6 +1386,34 @@ class MCBot:
 
     async def _on_messages_waiting(self, event) -> None:
         self.logger.info("MSG_WAIT received (radio has queued messages)")
+
+    def _begin_queue_drain(self) -> None:
+        # opens the "these messages are offline backlog" window; closed by
+        # the first NO_MORE_MSGS (or the failsafe deadline in _is_from_queue).
+        self._radio_queue_drained = False
+        self._drain_deadline = time.monotonic() + 60.0
+
+    def _is_from_queue(self) -> bool:
+        if self._radio_queue_drained:
+            return False
+        if time.monotonic() > self._drain_deadline:
+            # NO_MORE_MSGS never arrived (unexpected firmware/lib behavior);
+            # fail open so live commands are not ignored forever.
+            self.logger.warning(
+                "startup queue-drain end marker never seen; treating "
+                "messages as live from now on"
+            )
+            self._radio_queue_drained = True
+            return False
+        return True
+
+    async def _on_no_more_msgs(self, event) -> None:
+        if not self._radio_queue_drained:
+            self._radio_queue_drained = True
+            self.logger.info(
+                "startup message queue drained (%d backlog command(s) "
+                "ignored)", self._queued_cmds_skipped,
+            )
 
     async def _on_new_contact(self, event) -> None:
         # library tells us about a advertising node we didn't know.
@@ -1837,7 +1874,7 @@ class MCBot:
         # without needing a reload or restart.
         cfg_row = await self.db.fetchone(
             "SELECT enabled, cooldown_seconds, "
-            "allowed_channels, allow_dm, dm_only "
+            "allowed_channels, allow_dm, dm_only, process_queued "
             "FROM command_config WHERE command=?",
             (cs.name,),
         )
@@ -1846,6 +1883,7 @@ class MCBot:
         allowed_channels = cs.allowed_channels
         allow_dm = cs.allow_dm
         dm_only = cs.dm_only
+        process_queued = cs.process_queued
         if cfg_row:
             if cfg_row["enabled"] is not None:
                 enabled = bool(cfg_row["enabled"])
@@ -1868,8 +1906,21 @@ class MCBot:
                 allow_dm = bool(cfg_row["allow_dm"])
             if cfg_row["dm_only"] is not None:
                 dm_only = bool(cfg_row["dm_only"])
+            if cfg_row["process_queued"] is not None:
+                process_queued = bool(cfg_row["process_queued"])
 
         if not enabled:
+            return
+        if ctx.from_queue and not process_queued:
+            # command arrived while the bot was offline and sat in the
+            # radio's queue; replying now (often hours late, and with no
+            # routing path recorded) is noise unless explicitly opted in.
+            self._queued_cmds_skipped += 1
+            self.logger.info(
+                "command '%s' from offline backlog ignored "
+                "(process_queued off) sender=%s",
+                cs.name, ctx.sender_name or ctx.sender_pubkey_prefix,
+            )
             return
         if ctx.is_dm and not allow_dm:
             return
@@ -2184,9 +2235,9 @@ class MCBot:
                 allowed_json = None
             await self.db.execute(
                 "INSERT INTO command_config "
-                "(command, enabled, cooldown_seconds, "
-                " allowed_channels, triggers, description, allow_dm, dm_only) "
-                "VALUES (?, 1, ?, ?, ?, ?, ?, ?)",
+                "(command, enabled, cooldown_seconds, allowed_channels, "
+                " triggers, description, allow_dm, dm_only, process_queued) "
+                "VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     cs.name,
                     cs.cooldown_default,
@@ -2195,6 +2246,7 @@ class MCBot:
                     cs.description,
                     1 if cs.allow_dm else 0,
                     1 if cs.dm_only else 0,
+                    1 if cs.process_queued else 0,
                 ),
             )
             seeded += 1
@@ -2829,6 +2881,12 @@ class MCBot:
                         EventType.MESSAGES_WAITING, self._on_messages_waiting
                     )
                 )
+            if hasattr(EventType, "NO_MORE_MSGS"):
+                self._subs.append(
+                    self.mc.subscribe(
+                        EventType.NO_MORE_MSGS, self._on_no_more_msgs
+                    )
+                )
             if hasattr(EventType, "CONNECTED"):
                 self._subs.append(
                     self.mc.subscribe(
@@ -2844,6 +2902,10 @@ class MCBot:
         except Exception:
             self.logger.exception("subscribing to events failed")
 
+        # messages fetched from here until the first NO_MORE_MSGS are the
+        # radio's offline backlog (queued while the bot was down) — commands
+        # in them are skipped unless the command opts in via process_queued.
+        self._begin_queue_drain()
         try:
             await self.mc.start_auto_message_fetching()
         except Exception:

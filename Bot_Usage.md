@@ -752,12 +752,27 @@ hello` first.
 | `ALLOWED_CHANNELS` | list / None | None | None = any decryptable channel; a list restricts to those |
 | `ALLOW_DM` | bool | True | Accept DM invocations |
 | `DM_ONLY` | bool | False | Channel invocations silently dropped |
+| `PROCESS_QUEUED` | bool | False | Also run for messages the radio queued while the bot was offline (see below) |
 
 These are seeded into `command_config` on first load. After that, the DB
 row is the runtime authority -- script-level values are fallbacks when the
 corresponding DB column is NULL. (`NAME`/`TRIGGERS` are not
 runtime-editable.) Note that **authorization is not a module attribute** --
 it lives entirely in group grants (see §6).
+
+#### Offline backlog (`PROCESS_QUEUED` / the `queued` column)
+
+While the bot is down, the radio keeps queueing received messages; on
+startup the library drains that backlog (everything fetched before the
+first `NO_MORE_MSGS` marker). Those messages are still ingested and stored
+normally, but **commands in them are skipped by default**: replies would
+fire hours late in a rapid burst, and queued messages carry no routing
+path (so e.g. `!path` would answer 'direct (no path)' for each). Skips are
+logged, and the drain-complete log line reports how many were ignored.
+Per-command opt-in via the `queued` checkbox on web Manage->Commands (or
+`PROCESS_QUEUED = True` in the script for the seed default). A live
+message arriving during the few-second drain window is treated as backlog
+-- an accepted edge given the window's size.
 
 #### Optional `!help` integration
 

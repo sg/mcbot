@@ -127,6 +127,13 @@ ALLOW_DM = True
 # DMs bind identity to a private key via ECDH so they're trustworthy.
 DM_ONLY = False
 
+# If True, also run this command for messages the radio queued while the
+# bot was offline (drained right after startup). Default False: those
+# commands are often hours old, arrive in a burst, and carry no routing
+# path (e.g. !path would answer 'direct (no path)'). Operators can
+# override per command at runtime via the web Manage->Commands page.
+PROCESS_QUEUED = False
+
 
 # ---------------------------------------------------------------------------
 # The handler. Called by the dispatcher after the message has cleared
