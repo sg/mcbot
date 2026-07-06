@@ -85,7 +85,8 @@ async def _run_dispatch(bot):
 
     cs = SimpleNamespace(
         name="ping", cooldown_default=0, allowed_channels=None,
-        allow_dm=True, dm_only=False, handle=fake_handle,
+        allow_dm=True, dm_only=False, process_queued=False,
+        handle=fake_handle,
     )
     bot.loader = SimpleNamespace(match=lambda text: cs)
 

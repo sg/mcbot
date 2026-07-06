@@ -178,7 +178,9 @@ CREATE TABLE IF NOT EXISTS command_config (
     triggers TEXT,                -- JSON array of trigger strings
     description TEXT,
     allow_dm INTEGER,
-    dm_only INTEGER
+    dm_only INTEGER,
+    process_queued INTEGER        -- NULL = script default; run commands
+                                  -- fetched from the radio's offline backlog?
 );
 """
 
@@ -194,8 +196,22 @@ class DB:
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.execute("PRAGMA foreign_keys=ON")
         self.conn.executescript(SCHEMA)
+        self._migrate()
         self.conn.commit()
         self.lock = asyncio.Lock()
+
+    def _migrate(self) -> None:
+        # additive upgrades for pre-existing databases — CREATE TABLE IF NOT
+        # EXISTS never alters a live table, so new columns must land here.
+        cols = {
+            r[1] for r in self.conn.execute(
+                "PRAGMA table_info(command_config)"
+            ).fetchall()
+        }
+        if "process_queued" not in cols:
+            self.conn.execute(
+                "ALTER TABLE command_config ADD COLUMN process_queued INTEGER"
+            )
 
     async def execute(self, sql: str, params: tuple = ()):
         async with self.lock:

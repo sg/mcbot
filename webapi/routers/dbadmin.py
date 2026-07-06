@@ -408,6 +408,7 @@ class CommandConfigPatch(BaseModel):
     cooldown_seconds: int | None = None
     allow_dm: bool | None = None
     dm_only: bool | None = None
+    process_queued: bool | None = None
     allowed_channels: list[str] | None = None
 
 
