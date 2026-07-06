@@ -1,11 +1,13 @@
 """Radio configuration management: name / radio params / location / loc-policy /
 identity import / reboot, with a stubbed radio (bot.mc.commands)."""
 
+import asyncio
 import os
 from types import SimpleNamespace
 
 import pytest
 
+from conftest import load_command
 from mcbot import derive_public_key
 from management import MgmtError
 
@@ -138,3 +140,34 @@ async def test_radio_error_surfaces(radio_bot):
     with pytest.raises(MgmtError) as e:
         await bot.mgmt.radio_set_name("x")
     assert "rejected" in e.value.message, "ERROR surfaced"
+
+
+async def test_adm_radio_reboot_is_deferred(radio_bot):
+    # the reboot must fire AFTER the acknowledgment is returned, so the
+    # reply DM isn't transmitted into a port the radio just dropped
+    adm = load_command("adm")
+    bot = radio_bot()
+    reboots = []
+
+    async def fake_reboot(**kw):
+        reboots.append(kw)
+
+    bot.mgmt.radio_reboot = fake_reboot
+    ctx = SimpleNamespace(bot=bot, sender_pubkey="ab" * 32, sender_name="bob")
+
+    sleeps = []
+    real_sleep = asyncio.sleep
+
+    async def fake_sleep(d):
+        sleeps.append(d)
+
+    asyncio.sleep = fake_sleep
+    try:
+        r = await adm._radio_reboot(ctx, "")
+        assert "reboot" in r.lower(), "acknowledgment text returned"
+        assert reboots == [], "reboot NOT fired inline with the reply"
+        await real_sleep(0.05)  # let the deferred task run (sleep is faked)
+    finally:
+        asyncio.sleep = real_sleep
+    assert len(reboots) == 1, "deferred task performed the reboot"
+    assert sleeps == [5.0], "reboot delayed to let the reply/ACK complete"
