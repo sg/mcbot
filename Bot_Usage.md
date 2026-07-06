@@ -763,8 +763,11 @@ it lives entirely in group grants (see §6).
 #### Offline backlog (`PROCESS_QUEUED` / the `queued` column)
 
 While the bot is down, the radio keeps queueing received messages; on
-startup the library drains that backlog (everything fetched before the
-first `NO_MORE_MSGS` marker). Those messages are still ingested and stored
+startup the bot actively pumps that backlog off the radio (everything
+fetched before the first `NO_MORE_MSGS` marker). The pump is the bot's
+own -- the radio does not re-announce pre-connect messages, so waiting on
+`MESSAGES_WAITING` pushes would leave the backlog stuck until the next
+live message arrived. Those messages are still ingested and stored
 normally, but **commands in them are skipped by default**: replies would
 fire hours late in a rapid burst, and queued messages carry no routing
 path (so e.g. `!path` would answer 'direct (no path)' for each). Skips are

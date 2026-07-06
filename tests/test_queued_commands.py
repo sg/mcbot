@@ -1,11 +1,62 @@
 """Offline-backlog handling: messages the radio queued while the bot was down
 are drained on startup (everything before the first NO_MORE_MSGS); commands in
-them are skipped unless the command opts in via process_queued."""
+them are skipped unless the command opts in via process_queued. The bot pumps
+the backlog itself — the library's auto-fetcher only wakes on MESSAGES_WAITING
+pushes, which the radio never sends for pre-connect messages."""
 
 import time
 from types import SimpleNamespace
 
 import mcbot
+
+
+def _msg_event(name, payload=None):
+    return SimpleNamespace(type=SimpleNamespace(name=name), payload=payload or {})
+
+
+class ScriptedQueue:
+    """get_msg stub yielding scripted events, delivering NO_MORE_MSGS to the
+    bot's handler like the real dispatcher would."""
+
+    def __init__(self, bot, events):
+        self.bot = bot
+        self.events = list(events)
+        self.calls = 0
+
+    async def get_msg(self, timeout=None):
+        self.calls += 1
+        ev = self.events.pop(0) if self.events else _msg_event("NO_MORE_MSGS")
+        if ev.type.name == "NO_MORE_MSGS":
+            await self.bot._on_no_more_msgs(ev)
+        return ev
+
+
+async def test_startup_pump_drains_whole_backlog(bot_factory):
+    bot = bot_factory()
+    q = ScriptedQueue(bot, [
+        _msg_event("CHANNEL_MSG_RECV"),
+        _msg_event("CONTACT_MSG_RECV"),
+        _msg_event("CHANNEL_MSG_RECV"),
+        _msg_event("NO_MORE_MSGS"),
+    ])
+    bot.mc = SimpleNamespace(commands=q)
+    bot._begin_queue_drain()
+    await bot._drain_radio_queue()
+    assert q.calls == 4, "pumps get_msg until NO_MORE_MSGS (not just once)"
+    assert bot._radio_queue_drained, "window closed by the drain marker"
+
+
+async def test_startup_pump_force_closes_on_error(bot_factory):
+    bot = bot_factory()
+
+    async def broken_get_msg(timeout=None):
+        raise RuntimeError("radio hiccup")
+
+    bot.mc = SimpleNamespace(commands=SimpleNamespace(get_msg=broken_get_msg))
+    bot._begin_queue_drain()
+    await bot._drain_radio_queue()
+    assert bot._radio_queue_drained, \
+        "a failed pump must not leave the window open (live cmds ignored)"
 
 
 def _ctx(bot, *, from_queue=False):

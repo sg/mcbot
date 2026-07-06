@@ -1415,6 +1415,38 @@ class MCBot:
                 "ignored)", self._queued_cmds_skipped,
             )
 
+    async def _drain_radio_queue(self) -> None:
+        # Actively pump the radio's offline backlog at startup. The library's
+        # start_auto_message_fetching() fetches only ONE message up front and
+        # then waits for a MESSAGES_WAITING push — but the radio does not
+        # re-announce messages queued before we connected, so without this
+        # pump the rest of the backlog sits on the radio until the next live
+        # message kicks the fetch loop, and then drains as if live (minutes
+        # or hours later, past the drain window).
+        pumped = 0
+        while not self.stop_event.is_set() and pumped < 200:
+            try:
+                ev = await asyncio.wait_for(
+                    self.mc.commands.get_msg(), timeout=10.0
+                )
+            except Exception:
+                self.logger.exception("startup queue drain: get_msg failed")
+                break
+            name = getattr(getattr(ev, "type", None), "name", "")
+            if ev is None or name in ("NO_MORE_MSGS", "ERROR"):
+                break
+            pumped += 1
+            # yield so the dispatched message event gets ingested in order
+            await asyncio.sleep(0.05)
+        # the dispatched NO_MORE_MSGS closes the window in event order (after
+        # every backlog message handler has run). Give it a moment, then
+        # force-close so a lost marker can't leave the window open for 60s.
+        for _ in range(20):
+            if self._radio_queue_drained:
+                return
+            await asyncio.sleep(0.1)
+        await self._on_no_more_msgs(None)
+
     async def _on_new_contact(self, event) -> None:
         # library tells us about a advertising node we didn't know.
         self._contacts_dirty = True
@@ -2905,7 +2937,16 @@ class MCBot:
         # messages fetched from here until the first NO_MORE_MSGS are the
         # radio's offline backlog (queued while the bot was down) — commands
         # in them are skipped unless the command opts in via process_queued.
+        # Pump the whole backlog ourselves BEFORE starting the library's
+        # auto-fetcher: its loop only wakes on MESSAGES_WAITING pushes, which
+        # the radio does not send for pre-connect messages (they would leak
+        # out on the next live message, past the drain window, and be
+        # handled as live).
         self._begin_queue_drain()
+        try:
+            await self._drain_radio_queue()
+        except Exception:
+            self.logger.exception("startup queue drain failed")
         try:
             await self.mc.start_auto_message_fetching()
         except Exception:
