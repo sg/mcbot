@@ -136,7 +136,7 @@ async tasks serialize cleanly. See §7 for the schema.
 ### Install
 
 ```bash
-git clone <your-source>  mcbot
+git clone https://github.com/sg/mcbot.git mcbot
 cd mcbot
 python3 -m venv .venv
 source .venv/bin/activate
@@ -258,7 +258,9 @@ CLI: `--transport {tcp,serial}`, `--host`, `--port`, `--serial-port`, `--serial-
 **USB-serial notes**:
 - Heltec V3 (ESP32-S3) usually enumerates as `/dev/ttyACM0` or `/dev/ttyUSB0`
   depending on its USB-serial chip. Those numbers can change across
-  reboot/replug -- prefer the stable `/dev/serial/by-id/usb-...` symlink.
+  reboot/replug.
+- Rather than using `/dev/ttyXXXX`, you should use the stable `/dev/serial/by-id/usb-...` symlink
+  which won't change.
 - The bot's user might need to be in the `dialout` group (Linux) to open `/dev/tty*`,
   to prevent getting a permission error.
 - MeshCore companion serial runs at 115200 baud.
