@@ -919,6 +919,8 @@ in one reply. Arguments:
 - An explicit path string (comma-separated hex hops) -- reports on that path
   instead of your message's path. Hops must be uniform 1/2/3-byte hex
   (e.g. `d690,abcd,4f3d`).
+- A `#` ends argument parsing: it and everything after it is ignored (so a
+  pasted channel tag or trailing comment isn't misread as a path string).
 
 ```
 !path                   → @[Alice] [4h] d690,da1c,34de,81bb route: ~8.5mi, direct: ~6.5mi, https://da.gd/abcd

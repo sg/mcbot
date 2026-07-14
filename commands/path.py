@@ -234,8 +234,9 @@ def _parse_path_arg(path_arg):
 
 async def handle(ctx):
     # args: 'k' switches distances to kilometers. anything else is treated
-    # as a comma-separated path string.
-    parts = ctx.message_text.split()
+    # as a comma-separated path string. a '#' ends argument parsing — it and
+    # everything after it (e.g. a pasted channel tag or comment) is ignored.
+    parts = ctx.message_text.split("#", 1)[0].split()
     args = parts[1:]
     unit = "km" if any(t.lower() == "k" for t in args) else "mi"
     u = "mi" if unit == "mi" else "km"

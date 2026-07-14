@@ -149,6 +149,30 @@ async def test_neighbour_hop_anchors_without_bot_or_sender(bot_factory):
         "neighbouring located hop anchors the collision (no bot/sender loc)"
 
 
+def full_ctx(bot, text):
+    # handle()-level ctx: no inbound path, so without a path argument the
+    # command answers the no-path reply.
+    return SimpleNamespace(
+        bot=bot, message_text=text, sender_name="bob",
+        sender_pubkey=None, sender_pubkey_prefix=None,
+        path=None, path_len=None, path_hash_mode=None,
+    )
+
+
+async def test_hash_ends_argument_parsing(bot_factory):
+    bot = bot_factory()
+    # '#…' must not be read as a path argument (it used to reply with a
+    # hex-format error); with no own path this falls through to no-path.
+    r = await pathcmd.handle(full_ctx(bot, "!path #general and stuff"))
+    assert r == "@[bob] direct (no path)"
+    # 'k' before the '#' is still honored
+    r = await pathcmd.handle(full_ctx(bot, "!path k #general"))
+    assert r == "@[bob] direct (no path)"
+    # a real argument before the '#' is still parsed as a path string
+    r = await pathcmd.handle(full_ctx(bot, "!path zzzz #general"))
+    assert "invalid hex hop" in r
+
+
 async def test_radius_zero_still_disambiguates_two_located(bot_factory):
     bot = bot_factory()
     await set_bot_location(bot, 32.0, -96.0)
