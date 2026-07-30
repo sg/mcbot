@@ -1,6 +1,6 @@
 """Pluggable URL shortening for !path and !topo.
 
-Covers provider selection, the Sink upsert request the bot builds, and the
+Covers provider selection, the Sink create request the bot builds, and the
 fallback chain. requests is stubbed throughout: no test touches the network.
 
 The fallback matters more than it looks — a Sink instance enforces its own
@@ -84,30 +84,29 @@ def test_none_disables_shortening(net):
     assert not net.calls["get"] and not net.calls["post"], "no request at all"
 
 
-def test_sink_upsert_request(net, sink_token):
+def test_sink_create_request(net, sink_token):
     net.scripted["post"] = FakeResponse(
-        payload={"shortLink": "https://sht.nz/mcabc", "status": "created"},
+        payload={"shortLink": "https://sht.nz/abc123", "status": "created"},
     )
     got = shortener.shorten(LONG, cfg_for("sink"), tag="path")
-    assert got == "https://sht.nz/mcabc", "returns Sink's shortLink"
+    assert got == "https://sht.nz/abc123", "returns Sink's shortLink"
 
     req = net.calls["post"][0]
-    assert req["url"] == "https://sht.nz/api/link/upsert", "upsert endpoint"
+    assert req["url"] == "https://sht.nz/api/link/create", "create endpoint"
     assert req["headers"]["Authorization"] == "Bearer test-token", "bearer auth"
     body = req["json"]
     assert body["url"] == LONG
-    assert body["slug"] == shortener.sink_slug(LONG), "deterministic slug"
     assert body["tags"] == ["mcbot", "path"], "tagged for the dashboard"
     assert body["expiration"] > 0, "expiring link"
     assert not net.calls["get"], "no da.gd call when sink succeeds"
 
 
-def test_sink_slug_is_stable_and_url_safe():
-    a = shortener.sink_slug(LONG)
-    assert a == shortener.sink_slug(LONG), "same url -> same slug (upsert dedup)"
-    assert a != shortener.sink_slug(LONG + "B"), "different url -> different slug"
-    # Sink slugs must match /^[a-z0-9]+(?:-[a-z0-9]+)*$/i
-    assert a.isalnum() and a.islower(), f"slug not url-safe: {a}"
+def test_no_slug_is_sent(net, sink_token):
+    # Sink's own generated slug is 6 characters; supplying one of our own
+    # would only make the reply longer, and a mesh message has ~180 to spend.
+    net.scripted["post"] = FakeResponse(payload={"shortLink": "https://sht.nz/x"})
+    shortener.shorten(LONG, cfg_for("sink"))
+    assert "slug" not in net.calls["post"][0]["json"], "sink picks the slug"
 
 
 def test_zero_ttl_omits_expiration(net, sink_token):

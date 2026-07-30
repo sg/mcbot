@@ -368,9 +368,12 @@ SINK_API_TOKEN = <your NUXT_SITE_TOKEN>
 The token is Sink's `NUXT_SITE_TOKEN` (its API bearer credential), *not* the
 `NUXT_CF_API_TOKEN` analytics token. Notes on the `sink` provider:
 
-- Links are created with `POST /api/link/upsert` and a slug derived from a
-  hash of the target URL, so re-requesting the same route re-uses the
-  existing short link instead of adding a row per invocation.
+- Links are created with `POST /api/link/create` and no slug, so Sink
+  assigns its own -- 6 characters by default. Every character matters in a
+  mesh message, which is why the bot doesn't supply a longer deterministic
+  slug to make repeat routes share a link; `sink_link_ttl_days` keeps the
+  table from growing without bound instead. To go shorter still, set
+  `NUXT_PUBLIC_SLUG_DEFAULT_LENGTH` on the Sink instance.
 - **It falls back to da.gd** when Sink is unreachable, misconfigured, or
   rejects the URL. Sink caps target URLs (2048 characters by default), and a
   route past ~8 hops exceeds that -- the fallback is what keeps long routes

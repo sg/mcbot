@@ -106,10 +106,9 @@ enabled = true
 ; !path has no reply to give without one.
 ;   dagd  public da.gd service; no account or configuration (default)
 ;   sink  your own Sink instance; needs sink_api_base + SINK_API_TOKEN below.
-;         Links are upserted under a slug derived from the target URL, so the
-;         same route re-uses one short link. Falls back to da.gd when Sink is
-;         unreachable or rejects the URL (Sink caps target URLs at 2048
-;         characters by default; a route past ~8 hops exceeds that).
+;         Sink assigns each link its own 6-character slug. Falls back to da.gd
+;         when Sink is unreachable or rejects the URL (Sink caps target URLs
+;         at 2048 characters by default; a route past ~8 hops exceeds that).
 ;   none  no shortening: !topo sends the raw URL, !path replies '(map err)'
 ;url_shortener = dagd
 ;sink_api_base = https://sht.nz

@@ -11,7 +11,6 @@ enforces its own maximum target-URL length (2048 characters by default), so
 a long enough route would otherwise lose its map link entirely.
 """
 
-import hashlib
 import os
 import time
 
@@ -21,17 +20,7 @@ PROVIDERS = ("dagd", "sink", "none")
 
 _DAGD_URL = "https://da.gd/s"
 _TIMEOUT = 8
-# Sink slugs match /^[a-z0-9]+(?:-[a-z0-9]+)*$/i, so hex needs no encoding.
-_SINK_SLUG_PREFIX = "mc"
-_SINK_SLUG_CHARS = 10
 _SINK_TOKEN_ENV = "SINK_API_TOKEN"
-
-
-def sink_slug(long_url):
-    # Deterministic slug: re-shortening the same map upserts onto the same
-    # short link instead of minting a row per !path invocation.
-    digest = hashlib.sha256(long_url.encode("utf-8")).hexdigest()
-    return _SINK_SLUG_PREFIX + digest[:_SINK_SLUG_CHARS]
 
 
 def _shorten_dagd(long_url):
@@ -44,17 +33,22 @@ def _shorten_dagd(long_url):
 
 
 def _shorten_sink(long_url, base, token, ttl_days, tag):
-    payload = {"url": long_url, "slug": sink_slug(long_url)}
+    # No slug: Sink generates its own, which is 6 characters by default
+    # (slugDefaultLength) against a 30-character alphabet. Every character
+    # counts in a ~180-character mesh message, so that beats a longer
+    # deterministic slug that would let repeat routes share one link --
+    # sink_link_ttl_days does the housekeeping instead.
+    payload = {"url": long_url}
     if tag:
         payload["tags"] = ["mcbot", tag]
         payload["comment"] = f"mcbot !{tag}"
     if ttl_days > 0:
         payload["expiration"] = int(time.time()) + int(ttl_days) * 86400
-    # upsert, not create: an identical map re-uses the existing link and
-    # returns status='existing'. An expired link is not considered existing,
-    # so the same route is re-created after its TTL lapses.
+    # create, not upsert: on the (remote) chance Sink's generated slug is
+    # already taken, create reports 409 rather than upsert's silent
+    # "here's the existing link", which would hand back someone else's map.
     r = requests.post(
-        base.rstrip("/") + "/api/link/upsert",
+        base.rstrip("/") + "/api/link/create",
         json=payload,
         headers={"Authorization": f"Bearer {token}"},
         timeout=_TIMEOUT,
