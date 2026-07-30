@@ -375,10 +375,13 @@ The token is Sink's `NUXT_SITE_TOKEN` (its API bearer credential), *not* the
   table from growing without bound instead. To go shorter still, set
   `NUXT_PUBLIC_SLUG_DEFAULT_LENGTH` on the Sink instance.
 - **It falls back to da.gd** when Sink is unreachable, misconfigured, or
-  rejects the URL. Sink caps target URLs (2048 characters by default), and a
-  route past ~8 hops exceeds that -- the fallback is what keeps long routes
-  from silently losing their map. Raise `UrlSchema` in your Sink instance's
-  `shared/schemas/link.ts` if you'd rather it accept them directly.
+  rejects the URL, so a route never silently loses its map. The one limit
+  worth knowing is the target-URL cap each instance enforces: stock Sink
+  allows 2048 characters, which a route past ~8 hops exceeds. It is a
+  one-line change -- `UrlSchema` in `shared/schemas/link.ts` -- and at 8192
+  a route would have to exceed ~30 hops to hit it, which no real mesh path
+  does. Check yours before assuming long routes reach Sink rather than the
+  fallback.
 - Clicks on bot-generated links land in your Sink analytics.
 
 Changing any of these needs a bot restart -- `!adm reload` re-executes

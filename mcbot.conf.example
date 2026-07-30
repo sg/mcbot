@@ -107,8 +107,10 @@ enabled = true
 ;   dagd  public da.gd service; no account or configuration (default)
 ;   sink  your own Sink instance; needs sink_api_base + SINK_API_TOKEN below.
 ;         Sink assigns each link its own 6-character slug. Falls back to da.gd
-;         when Sink is unreachable or rejects the URL (Sink caps target URLs
-;         at 2048 characters by default; a route past ~8 hops exceeds that).
+;         when Sink is unreachable or rejects the URL -- e.g. for exceeding
+;         the instance's target-URL cap (UrlSchema in shared/schemas/link.ts;
+;         stock Sink allows 2048 characters, which a route past ~8 hops
+;         exceeds; at 8192 no real path comes close).
 ;   none  no shortening: !topo sends the raw URL, !path replies '(map err)'
 ;url_shortener = dagd
 ;sink_api_base = https://sht.nz

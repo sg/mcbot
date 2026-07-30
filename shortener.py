@@ -6,9 +6,10 @@ service does the shortening is an admin choice ([bot] url_shortener),
 because the alternative to the public da.gd service is a self-hosted Sink
 instance whose API token can't live in a git-tracked command script.
 
-Provider 'sink' falls back to da.gd rather than failing: a Sink instance
-enforces its own maximum target-URL length (2048 characters by default), so
-a long enough route would otherwise lose its map link entirely.
+Provider 'sink' falls back to da.gd rather than failing, since an instance
+can be down, misconfigured, or stricter than the bot expects -- a Sink
+instance enforces its own maximum target-URL length, 2048 characters unless
+raised, and a long enough route would otherwise lose its map link entirely.
 """
 
 import os
