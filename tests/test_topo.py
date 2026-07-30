@@ -2,7 +2,7 @@
 
 Covers: help, short prefix, no match, single match (URL + name), single match
 without geo, ambiguous-prefix list, sender's own location, and the
-no-location-for-sender case. The da.gd shortener is monkeypatched so the tests
+no-location-for-sender case. The shortener is monkeypatched so the tests
 never touch the network."""
 
 from types import SimpleNamespace
@@ -14,12 +14,13 @@ topo = load_command("topo")
 _captured = {}
 
 
-def _fake_shorten(url):
+def _fake_shorten(url, cfg, logger=None, tag=""):
     _captured["url"] = url
+    _captured["tag"] = tag
     return "https://da.gd/test"
 
 
-topo._shorten_sync = _fake_shorten  # no network in tests
+topo.shorten = _fake_shorten  # no network in tests
 
 
 def pk(prefix):

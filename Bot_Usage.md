@@ -316,6 +316,9 @@ CLI: `--logs-dir`, `--log-level`, `--debug` (sets meshcore lib to DEBUG)
 | `dm_max_attempts` | 3 | `send_msg_with_retry` max attempts |
 | `dm_flood_after` | 2 | Switch to flood routing after N direct attempts |
 | `dm_max_flood_attempts` | 2 | Max flood-mode retries |
+| `url_shortener` | `dagd` | `dagd`, `sink`, or `none` -- see [URL shortening](#url-shortening) |
+| `sink_api_base` | (empty) | Sink instance base URL, e.g. `https://sht.nz`. Required when `url_shortener = sink` |
+| `sink_link_ttl_days` | 30 | Days before a bot-created Sink link expires; `0` keeps them forever |
 
 CLI: `--commands-dir`, `--privkey-path`, `--disable-commands`,
 `--dm-max-attempts`, `--dm-flood-after`, `--dm-max-flood-attempts`,
@@ -336,6 +339,53 @@ CLI: `--commands-dir`, `--privkey-path`, `--disable-commands`,
 
 To re-seed from conf: `sqlite3 mcbot.db "DELETE FROM channels;"` then
 restart.
+
+### URL shortening
+
+`!path` and `!topo` reply with map links. A mesh message has ~180 characters
+to spend and a geojson.io map payload alone runs to several KB, so the link
+has to be shortened by a service. `[bot] url_shortener` picks which:
+
+| Value | Behaviour |
+|-------|-----------|
+| `dagd` | Public [da.gd](https://da.gd) service. No account, no configuration. Default. |
+| `sink` | Your own [Sink](https://github.com/miantiao-me/Sink) instance. Needs `sink_api_base` and a `SINK_API_TOKEN`. |
+| `none` | No shortening. `!topo` sends the raw OpenTopoMap URL; `!path` replies `(map err)`. |
+
+For `sink`, put the token in `[env]` rather than a command script -- the conf
+file is gitignored, `commands/*.py` are tracked:
+
+```ini
+[bot]
+url_shortener = sink
+sink_api_base = https://sht.nz
+sink_link_ttl_days = 30
+
+[env]
+SINK_API_TOKEN = <your NUXT_SITE_TOKEN>
+```
+
+The token is Sink's `NUXT_SITE_TOKEN` (its API bearer credential), *not* the
+`NUXT_CF_API_TOKEN` analytics token. Notes on the `sink` provider:
+
+- Links are created with `POST /api/link/create` and no slug, so Sink
+  assigns its own -- 6 characters by default. Every character matters in a
+  mesh message, which is why the bot doesn't supply a longer deterministic
+  slug to make repeat routes share a link; `sink_link_ttl_days` keeps the
+  table from growing without bound instead. To go shorter still, set
+  `NUXT_PUBLIC_SLUG_DEFAULT_LENGTH` on the Sink instance.
+- **It falls back to da.gd** when Sink is unreachable, misconfigured, or
+  rejects the URL, so a route never silently loses its map. The one limit
+  worth knowing is the target-URL cap each instance enforces: stock Sink
+  allows 2048 characters, which a route past ~8 hops exceeds. It is a
+  one-line change -- `UrlSchema` in `shared/schemas/link.ts` -- and at 8192
+  a route would have to exceed ~30 hops to hit it, which no real mesh path
+  does. Check yours before assuming long routes reach Sink rather than the
+  fallback.
+- Clicks on bot-generated links land in your Sink analytics.
+
+Changing any of these needs a bot restart -- `!adm reload` re-executes
+command plugins but not the shared `shortener` module.
 
 ---
 
@@ -934,8 +984,9 @@ in one reply. Arguments:
   (gaps are bridged, so route ≥ direct). **direct** = great-circle distance
   between the first and last located hop. 0.1 resolution. `mi` = miles, `km` = km.
 - The map is a [geojson.io](https://geojson.io) link drawing a LineString
-  through the located hops plus a labeled marker per hop, shortened via da.gd
-  so the reply fits a mesh message. Open it in any browser with internet.
+  through the located hops plus a labeled marker per hop, shortened so the
+  reply fits a mesh message (see [URL shortening](#url-shortening)). Open it
+  in any browser with internet.
 - If some hops can't be located, a `(located/total)` count is shown and the
   distances/map use only the located hops:
   ```
@@ -960,12 +1011,16 @@ in one reply. Arguments:
   own location on the radio helps but isn't required.
 
 - 10s per-user cooldown; no auth; works in DM and any allowed channel.
-- Makes a da.gd shortener call per invocation (when ≥2 hops are located).
+- Makes one shortener call per invocation (when ≥1 hop is located). The
+  geojson payload is several KB, so with shortening off or unreachable the
+  reply ends in `(map err)` -- there is no raw URL short enough to send.
 
 ### `!topo` / `!topo <prefix>` / `!topo help`
 
 Plots a contact's advertised location on [OpenTopoMap](https://opentopomap.org)
-and replies with a da.gd-shortened marker link (zoom 16).
+and replies with a shortened marker link (zoom 16). Unlike `!path`, the raw
+OpenTopoMap URL is short enough to send, so it is used as-is if shortening
+is off or unreachable.
 
 ```
 !topo a1b2c3      → @[Alice] HillTop https://da.gd/abcd
