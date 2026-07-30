@@ -1,4 +1,4 @@
-# !topo — plot a contact's location on OpenTopoMap (with a da.gd short link)
+# !topo — plot a contact's location on OpenTopoMap (with a short link)
 #
 # usage:
 #   !topo <pubkey-prefix>   plot that contact's location (prefix 4+ hex chars)
@@ -12,7 +12,7 @@
 
 import asyncio
 
-import requests
+from shortener import shorten
 
 NAME = "topo"
 TRIGGERS = ["!topo"]
@@ -24,16 +24,6 @@ ALLOW_DM = True
 _MIN_PREFIX = 4        # minimum pubkey-prefix length, in hex chars
 _MAX_MATCHES = 10      # cap the disambiguation list
 _USAGE = "!topo [pub-key prefix] (4+ chars)"
-
-
-def _shorten_sync(long_url):
-    # shorten via da.gd (same service !path uses)
-    r = requests.get("https://da.gd/s", params={"url": long_url}, timeout=8)
-    r.raise_for_status()
-    s = r.text.strip()
-    if not s.startswith("http"):
-        raise ValueError(f"shortener error: {s[:60]}")
-    return s
 
 
 def _topo_url(lat, lon):
@@ -49,13 +39,12 @@ def _has_geo(row):
 
 
 async def _map_reply(ctx, name, contact_name, lat, lon):
-    # build the OpenTopoMap link and shorten it; if da.gd is unreachable fall
-    # back to the full URL (short enough to send) rather than failing.
+    # build the OpenTopoMap link and shorten it; if no shortener is configured
+    # or reachable, fall back to the full URL (short enough to send).
     url = _topo_url(lat, lon)
-    try:
-        url = await asyncio.to_thread(_shorten_sync, url)
-    except Exception:
-        ctx.bot.logger.exception("topo: shorten failed")
+    url = await asyncio.to_thread(
+        shorten, url, ctx.bot.cfg, ctx.bot.logger, "topo",
+    ) or url
     label = (contact_name or "").strip() or "(no name)"
     return f"@[{name}] {label} {url}"
 

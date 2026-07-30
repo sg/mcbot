@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
+import shortener
 from protocol import parse_contact_types
 
 # ---------------------------------------------------------------------------
@@ -71,6 +72,17 @@ class Config:
     # anchor (any of the three above); the bot's own location helps but is not
     # required if a neighbouring hop resolves unambiguously.
     path_collision_radius_miles: float = 150.0
+    # --- map-link shortening (!path, !topo) ---
+    # 'dagd' (public da.gd), 'sink' (self-hosted Sink instance), or 'none'.
+    # 'sink' needs sink_api_base plus a SINK_API_TOKEN env var (set it in
+    # [env]; this file is gitignored, command scripts are not) and falls back
+    # to da.gd when Sink is unreachable or rejects the URL as too long.
+    url_shortener: str = "dagd"
+    sink_api_base: str = ""
+    # days until a bot-created Sink link expires; 0 keeps links forever.
+    # Map links are single-use in practice, and the slug is derived from the
+    # URL, so an expired route is simply re-created on the next request.
+    sink_link_ttl_days: int = 30
     debug: bool = False
     # idx -> (name, 16-byte secret)
     channels: dict[int, tuple[str, bytes]] = field(default_factory=dict)
@@ -149,7 +161,8 @@ _KNOWN_CONFIG_KEYS = {
             "radio_evict_headroom", "radio_evict_max_per_run",
             "radio_evict_min_interval", "radio_evict_protect_types",
             "advert_interval_hours", "command_delay", "watchdog_interval",
-            "owner_pubkeys"},
+            "owner_pubkeys", "url_shortener", "sink_api_base",
+            "sink_link_ttl_days"},
     "web": {"enabled", "host", "port", "admin_user", "admin_password_hash",
             "session_secret", "cors_origins", "api_tokens", "tls_cert",
             "tls_key"},
@@ -250,6 +263,26 @@ def load_config(args) -> Config:
             cfg.path_collision_radius_miles = max(0.0, parser["bot"].getfloat(
                 "path_collision_radius_miles", cfg.path_collision_radius_miles
             ))
+            cfg.url_shortener = parser["bot"].get(
+                "url_shortener", cfg.url_shortener
+            ).strip().lower()
+            if cfg.url_shortener not in shortener.PROVIDERS:
+                sys.stderr.write(
+                    f"ERROR: url_shortener must be one of "
+                    f"{', '.join(shortener.PROVIDERS)}\n"
+                )
+                sys.exit(2)
+            cfg.sink_api_base = parser["bot"].get(
+                "sink_api_base", cfg.sink_api_base
+            ).strip()
+            cfg.sink_link_ttl_days = max(0, parser["bot"].getint(
+                "sink_link_ttl_days", cfg.sink_link_ttl_days
+            ))
+            if cfg.url_shortener == "sink" and not cfg.sink_api_base:
+                sys.stderr.write(
+                    "ERROR: url_shortener = sink needs sink_api_base\n"
+                )
+                sys.exit(2)
             pk = parser["bot"].get("privkey_path", "")
             if pk:
                 cfg.privkey_path = Path(pk)

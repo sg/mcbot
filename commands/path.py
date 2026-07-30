@@ -9,7 +9,8 @@
 # - <n>h         hop count; <hops> are per-hop pubkey-prefix hashes.
 # - route        great-circle distance summed between consecutive located hops.
 # - direct       great-circle distance between the first and last located hop.
-# - <url>        da.gd shortened geojson.io map drawing the route.
+# - <url>        shortened geojson.io map drawing the route. which shortener
+#                is used is set by [bot] url_shortener in mcbot.conf.
 # - distances are miles by default. pass 'k' for kilometers:  !path k
 # - if some hops can't be located, a (located/total) count is shown and the
 #   distances/map use only the located hops.
@@ -24,7 +25,7 @@ import base64
 import json
 import math
 
-import requests
+from shortener import shorten
 
 NAME = "path"
 TRIGGERS = ["!path"]
@@ -201,19 +202,6 @@ def _geojson_io_url(located_named):
     return "https://geojson.io/#data=data:application/json;base64," + b64
 
 
-def _shorten_sync(long_url):
-    # shorten via da.gd
-    # 
-    r = requests.get(
-        "https://da.gd/s", params={"url": long_url}, timeout=8,
-    )
-    r.raise_for_status()
-    s = r.text.strip()
-    if not s.startswith("http"):
-        raise ValueError(f"shortener error: {s[:60]}")
-    return s
-
-
 def _parse_path_arg(path_arg):
     # parse provided path string argument into path_hex, path_len, 
     # hash_mode. returns an error string on bad input.
@@ -294,12 +282,12 @@ async def handle(ctx):
     if n_located == 0:
         return f"@[{name}] [{nh}h] {path_str} dist/map unavailable (0/{nh})"
 
-    # map link for any 1 or more located hops
-    try:
-        short = await asyncio.to_thread(_shorten_sync, _geojson_io_url(loc))
-    except Exception:
-        ctx.bot.logger.exception("path map: shorten failed")
-        short = None
+    # map link for any 1 or more located hops. the geojson payload is far too
+    # long to send raw, so without a shortener there is no map to offer.
+    short = await asyncio.to_thread(
+        shorten, _geojson_io_url(loc), ctx.bot.cfg,
+        ctx.bot.logger, "path",
+    )
     map_part = f", {short}" if short else " (map err)"
 
     # one located hop can't compute a distance, but still map the pin.
