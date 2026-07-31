@@ -382,6 +382,13 @@ The token is Sink's `NUXT_SITE_TOKEN` (its API bearer credential), *not* the
   a route would have to exceed ~30 hops to hit it, which no real mesh path
   does. Check yours before assuming long routes reach Sink rather than the
   fallback.
+- Each link is tagged `mcbot` and with the command (`path`, `topo`), and
+  `!path` links also carry `from:<sender>` -- the same name the reply is
+  addressed to, so the Sink dashboard's tag filter shows who generated a
+  map. The prefix keeps a sender named like a command distinct, since Sink
+  lowercases and de-duplicates tags. Names are trimmed to fit Sink's
+  32-character tag limit, which it counts in UTF-16 units (an emoji costs
+  two) and enforces by rejecting the whole request.
 - Clicks on bot-generated links land in your Sink analytics.
 
 Changing any of these needs a bot restart -- `!adm reload` re-executes

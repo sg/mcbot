@@ -286,7 +286,7 @@ async def handle(ctx):
     # long to send raw, so without a shortener there is no map to offer.
     short = await asyncio.to_thread(
         shorten, _geojson_io_url(loc), ctx.bot.cfg,
-        ctx.bot.logger, "path",
+        ctx.bot.logger, "path", name,
     )
     map_part = f", {short}" if short else " (map err)"
 
