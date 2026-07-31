@@ -14,9 +14,10 @@ topo = load_command("topo")
 _captured = {}
 
 
-def _fake_shorten(url, cfg, logger=None, tag=""):
+def _fake_shorten(url, cfg, logger=None, tag="", sender=""):
     _captured["url"] = url
     _captured["tag"] = tag
+    _captured["sender"] = sender
     return "https://da.gd/test"
 
 
@@ -68,6 +69,9 @@ async def test_single_match_with_geo(bot_factory):
     assert _captured.get("url") == \
         "https://opentopomap.org/#marker=16/30.31023/-97.84505", \
         "OpenTopoMap url passed to shortener"
+    # the tag records who asked, not the contact that was plotted
+    assert _captured.get("sender") == "bob", "sender passed for the from: tag"
+    assert _captured.get("tag") == "topo", "tagged as the topo command"
 
 
 async def test_single_match_no_geo(bot_factory):

@@ -42,8 +42,10 @@ async def _map_reply(ctx, name, contact_name, lat, lon):
     # build the OpenTopoMap link and shorten it; if no shortener is configured
     # or reachable, fall back to the full URL (short enough to send).
     url = _topo_url(lat, lon)
+    # `name` is the sender, not the contact being plotted -- the tag records
+    # who asked, matching !path.
     url = await asyncio.to_thread(
-        shorten, url, ctx.bot.cfg, ctx.bot.logger, "topo",
+        shorten, url, ctx.bot.cfg, ctx.bot.logger, "topo", name,
     ) or url
     label = (contact_name or "").strip() or "(no name)"
     return f"@[{name}] {label} {url}"

@@ -101,6 +101,47 @@ def test_sink_create_request(net, sink_token):
     assert not net.calls["get"], "no da.gd call when sink succeeds"
 
 
+def tags_from(net, sender, tag="path"):
+    net.scripted["post"] = FakeResponse(payload={"shortLink": "https://sht.nz/x"})
+    shortener.shorten(LONG, cfg_for("sink"), tag=tag, sender=sender)
+    return net.calls["post"][-1]["json"]["tags"]
+
+
+def test_sender_is_tagged(net, sink_token):
+    assert tags_from(net, "Alice") == ["mcbot", "path", "from:Alice"], \
+        "sender attributed on the link"
+
+
+def test_sender_tag_is_prefixed_against_collisions(net, sink_token):
+    # Sink lowercases and de-duplicates tags, so a bare "Path" sender tag
+    # would silently merge into the command tag and lose the attribution
+    assert tags_from(net, "Path") == ["mcbot", "path", "from:Path"], \
+        "prefix keeps a sender named like the command distinct"
+
+
+def test_missing_sender_adds_no_tag(net, sink_token):
+    for empty in ("", "   ", None):
+        assert tags_from(net, empty) == ["mcbot", "path"], \
+            f"no from: tag for {empty!r}"
+
+
+def test_long_sender_is_truncated(net, sink_token):
+    # Sink rejects the whole create if any tag exceeds 32, which would drop
+    # the link to the da.gd fallback rather than just losing the tag
+    tags = tags_from(net, "A" * 60)
+    assert len(tags[-1]) == 32, f"tag fitted to the limit (got {len(tags[-1])})"
+    assert tags[-1].startswith("from:AAAA")
+
+
+def test_emoji_sender_measured_in_utf16_units(net, sink_token):
+    # Sink counts tag length the way JS does: an astral char costs 2 units,
+    # so 27 emoji would be 54 units and reject the request outright
+    tags = tags_from(net, "\U0001F680" * 27)
+    units = len(tags[-1].encode("utf-16-le")) // 2
+    assert units <= 32, f"tag is {units} UTF-16 units, over Sink's limit"
+    assert tags[-1] == "from:" + "\U0001F680" * 13, "13 emoji = 26 units + 5"
+
+
 def test_no_slug_is_sent(net, sink_token):
     # Sink's own generated slug is 6 characters; supplying one of our own
     # would only make the reply longer, and a mesh message has ~180 to spend.
