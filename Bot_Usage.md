@@ -430,14 +430,17 @@ WantedBy=multi-user.target
 
 | What changed | How to apply |
 |--------------|--------------|
-| `commands/*.py` (new or edited plugin) | DM `!adm reload` |
-| `mcbot.conf` | DM `!adm restart` (re-reads conf, re-opens DB, reconnects) |
+| `commands/*.py` (new or edited plugin) | DM `!adm reload`, or web Manage->Commands->**Reload** |
+| `mcbot.conf` | DM `!adm restart` (re-reads conf, re-opens DB, reconnects), or web Manage->Overview->**Restart** |
 | `command_config` table edit | Nothing -- read fresh on each dispatch |
 | `mcbot.py` itself | Kill process, restart from shell |
 | Radio firmware upgrade | Kill process (radio reboots), restart |
 
 `!adm restart` schedules teardown ~5 seconds after the acknowledgment
 reply so the ACK has time to be sent and confirmed before the disconnect.
+The web **Restart** button defers only ~1 second (an HTTP response needs no
+radio ACK); the page then probes `/api/health` every 10 seconds and reloads
+itself once the bot is back.
 
 ### Radio reconnection (radio reboot / power-cycle / link loss)
 
@@ -1413,7 +1416,10 @@ Then run the bot. Look for `web admin UI/API on http://… (docs at /api/docs)`.
   delete groups and grant/revoke their commands (grant a command to the
   `public` group to make it open to everyone), and toggle per-command
   config (enabled, allow_dm, dm_only, cooldown, allowed_channels).
-  Contacts and the audit log are read-only.
+  Contacts and the audit log are read-only. Overview has a **Restart**
+  button (`!adm restart` equivalent; the page reloads itself when the bot
+  is back) and Commands has a **Reload** button (`!adm reload` equivalent;
+  the list refreshes when it completes).
 
 ### Shared mutation service
 
@@ -1449,6 +1455,8 @@ Writes (all audited via `bot.mgmt`):
 | POST/DELETE | `/api/groups/{name}/commands[/{cmd}]` | grant / revoke a command |
 | POST/DELETE | `/api/channels[/{name}]` | add / remove a channel |
 | PATCH | `/api/command-config/{command}` | edit a command's config |
+| POST | `/api/bot/reload` | rescan + re-import plugins (`!adm reload`) |
+| POST | `/api/bot/restart` | full teardown + reinit (`!adm restart`) |
 
 Errors map by kind: `404` not found, `409` conflict, `400` refused/invalid;
 the JSON `detail` carries the human-readable reason.

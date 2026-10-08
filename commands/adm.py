@@ -1017,37 +1017,21 @@ async def _cmd_status(ctx, _):
 
 
 async def _cmd_reload(ctx, _):
-    before, after, errors = ctx.bot.loader.reload_all()
-    seeded = await ctx.bot.seed_command_configs()
-    actor = (ctx.sender_pubkey or "").lower() or None
-    await ctx.bot.audit_log(
-        actor, ctx.sender_name, "reload", None,
-        f"{before}->{after}, errors={len(errors)}, seeded={seeded}",
-    )
-    out = [f"Reloaded: {before} -> {after} commands ({seeded} new seeded)"]
-    if errors:
-        out.append(f"errors ({len(errors)}):")
-        out.extend(f"  {e}" for e in errors)
+    r = await ctx.bot.mgmt.reload_commands(**_actor(ctx))
+    out = [
+        f"Reloaded: {r['before']} -> {r['after']} commands "
+        f"({r['seeded']} new seeded)"
+    ]
+    if r["errors"]:
+        out.append(f"errors ({len(r['errors'])}):")
+        out.extend(f"  {e}" for e in r["errors"])
     return out
 
 
 async def _cmd_restart(ctx, _):
-    bot = ctx.bot
-    actor = (ctx.sender_pubkey or "").lower() or None
-    await bot.audit_log(actor, ctx.sender_name, "restart", None, None)
-
-    # defer the actual teardown so this acknowledgment has time to be
-    # sent (and ideally ACKed) before the radio gets disconnected
-    async def _trigger():
-        await asyncio.sleep(5.0)
-        bot.logger.info(
-            "restart triggered by %s — tearing down",
-            ctx.sender_name or "?",
-        )
-        bot.restart_requested = True
-        bot.stop_event.set()
-
-    asyncio.create_task(_trigger())
+    # 5s so this acknowledgment has time to be sent (and ideally ACKed)
+    # before the radio gets disconnected
+    await ctx.bot.mgmt.restart(5.0, **_actor(ctx))
     return "Restarting — bot will reconnect in ~5 seconds"
 
 

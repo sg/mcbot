@@ -640,3 +640,23 @@ async def radio_reboot(
         return await bot.mgmt.radio_reboot(**actor_kwargs(identity))
     except MgmtError as e:
         raise http_for_mgmt(e)
+
+
+# --- bot lifecycle (web equivalents of '!adm reload' / '!adm restart') -----
+# long enough for this response to be delivered before the server is torn
+# down; nothing to ACK over the radio, so far shorter than the mesh's 5s.
+_RESTART_DELAY = 1.0
+
+
+@router.post("/bot/reload")
+async def bot_reload(
+    bot=Depends(get_bot), identity: str = Depends(require_auth),
+):
+    return await bot.mgmt.reload_commands(**actor_kwargs(identity))
+
+
+@router.post("/bot/restart")
+async def bot_restart(
+    bot=Depends(get_bot), identity: str = Depends(require_auth),
+):
+    return await bot.mgmt.restart(_RESTART_DELAY, **actor_kwargs(identity))
