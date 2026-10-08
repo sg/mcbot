@@ -967,6 +967,67 @@ Austin [US] (30.2672,-97.7431): 82F, Humid: 65%, Rain: 0.0in, Wind: SSE 5mph
 - Default allowed channels: `#wx`, `#wxbot`, `#wx-alert`, `#bot`
 
 
+### `!allergy <city|zip>` / `!air`
+
+Current airborne pollen levels for a US zip, a city, or -- with no
+argument -- the area around the first located repeater in the inbound
+message path (a direct message with no path uses the bot's own location).
+`!air` is an alias.
+
+Examples:
+```
+!allergy 78701
+!allergy Austin US
+!air London
+!allergy
+```
+
+Data sources, in order:
+
+- **Google Pollen API** when `POLLEN_GOOGLE_API_KEY` is set (in `[env]` or
+  the process environment). 80+ countries; tree/grass/weed index 0-5 plus
+  the top plants per type. The first 5,000 requests per month are free, but
+  the Google Cloud project must have billing enabled. Setup, in the Cloud
+  console with your project selected:
+  1. **Billing** -> link a billing account.
+  2. **APIs & Services -> Library** -> search "Pollen API" -> Enable.
+  3. **APIs & Services -> Credentials -> Create credentials -> API key**;
+     then edit the key and under *API restrictions* allow only "Pollen API".
+  4. Optional but recommended: **APIs & Services -> Enabled APIs -> Pollen
+     API -> Quotas** -> lower "Requests per day" (e.g. 150) so the free
+     monthly allowance can never be exceeded.
+  5. Put the key in `mcbot.conf` under `[env]` as `POLLEN_GOOGLE_API_KEY`
+     and restart the bot (`[env]` is exported at startup, not on reload).
+
+  Or with the gcloud CLI:
+  ```
+  gcloud services enable pollen.googleapis.com --project=<project-id>
+  gcloud services api-keys create --project=<project-id> \
+      --display-name=mcbot-pollen --api-target=service=pollen.googleapis.com
+  ```
+  The key string is printed in the create output. Verify it with:
+  ```
+  curl "https://pollen.googleapis.com/v1/forecast:lookup?key=<key>&location.latitude=30.27&location.longitude=-97.74&days=1"
+  ```
+- **pollen.com** (IQVIA) when no key is set, or when the Google lookup
+  fails (quota, outage): US-only, one 0-12 index plus the top trigger
+  plants. This is the undocumented endpoint behind pollen.com's own site,
+  so it may break without notice. A city is mapped to a zip through
+  Open-Meteo's geocoder (then the US Census geocoder if that zip has no
+  data); repeater coordinates go through the US Census geocoder.
+
+Replies (Google, then pollen.com, then pollen.com located via a repeater):
+```
+Austin, Texas: Tree 2/5 low (Elm,Oak), Grass 1/5 vlow (Grasses), Weed 4/5 high (Ragweed)
+Austin TX: 9/12 med-high (Ragweed, Elm, Grasses), tmrw 8.9
+nr Woodson (92025): 5/12 med (Elm, Sagebrush, Grasses), tmrw 4.8
+```
+
+- 30s per-user cooldown
+- Owner-only until granted (`!adm group grant public allergy`)
+- Default allowed channels: `#wx`, `#bot`
+
+
 ### `!path` / `!path k` / `!path <hops>`
 
 Reports the routing path your message took to reach the bot, the routed and
