@@ -293,12 +293,12 @@ async def _path_location(ctx):
         loc = await pc._bot_location(ctx)
         if not loc:
             return "direct (no path) and bot location unset; try !allergy <city|zip>"
-        return loc[0], loc[1], "nr bot"
+        return loc[0], loc[1], "(near bot)"
     resolved = await pc._resolve_hops(ctx, hops)
     for hop, r in zip(hops, resolved):
         if r:
             lat, lon, name = r
-            return lat, lon, f"nr {name or hop}"
+            return lat, lon, f"(near {name or hop})"
     return f"no located repeater in path ({len(hops)}h); try !allergy <city|zip>"
 
 
