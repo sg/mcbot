@@ -1,4 +1,4 @@
-"""!allergy / !air: argument parsing, reply formatting for both backends,
+"""!allergy / !air / !pollen: argument parsing, reply formatting for both backends,
 backend selection (Google when keyed, pollen.com otherwise or on failure),
 and locating the sender from the first located repeater in the path."""
 
@@ -144,6 +144,8 @@ def stub_net(monkeypatch):
 @pytest.mark.parametrize("text,expected", [
     ("!allergy", ("path", None, None)),
     ("!air   ", ("path", None, None)),
+    ("!pollen", ("path", None, None)),
+    ("!Pollen 92025", ("zip", "92025", "US")),
     ("!allergy 78701", ("zip", "78701", "US")),
     ("!air 78701-1234", ("zip", "78701", "US")),
     ("!allergy Austin", ("city", "Austin", None)),

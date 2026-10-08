@@ -76,7 +76,7 @@ commands/                plugin scripts; one file per command
     whoami.py               !whoami (your identity + group memberships)
     pws.py                  !pws (PWS station observation)
     wx.py                   !wx <city> [CC] (Open-Meteo)
-    allergy.py              !allergy <city|zip> / !air (pollen levels; Google Pollen API or pollen.com)
+    allergy.py              !allergy <city|zip> / !air / !pollen (pollen levels; Google Pollen API or pollen.com)
     path.py                 !path (routing path + distance + map link)
     topo.py                 !topo (geo-locate contact via topographic map link)
     quote.py                !quote (responds with a random 'quote' from a file)
