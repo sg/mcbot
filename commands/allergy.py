@@ -1,5 +1,5 @@
-# !allergy / !air — current airborne pollen levels for a city or US zip, or
-# for the area around the first located repeater in the message path.
+# !allergy / !air / !pollen — current airborne pollen levels for a city or US
+# zip, or for the area around the first located repeater in the message path.
 #
 # usage:
 #   !allergy <zip>          US 5-digit zip              (!allergy 78701)
@@ -7,7 +7,7 @@
 #   !allergy                no argument: the first located repeater in the
 #                           inbound path; a direct message (no path) uses
 #                           the bot's own location
-#   !air ...                alias for !allergy
+#   !air / !pollen ...      aliases for !allergy
 #
 # data sources:
 #   - Google Pollen API when POLLEN_GOOGLE_API_KEY is set: 80+ countries,
@@ -29,7 +29,7 @@ from pathlib import Path
 import requests
 
 NAME = "allergy"
-TRIGGERS = ["!allergy", "!air"]
+TRIGGERS = ["!allergy", "!air", "!pollen"]
 DESCRIPTION = "Pollen levels: !allergy <city|zip> (no arg = nearest repeater)"
 COOLDOWN_DEFAULT = 30
 ALLOWED_CHANNELS = [
@@ -89,7 +89,7 @@ def _parse_args(text: str) -> tuple[str, str | None, str | None]:
     # returns (mode, value, country_code) with mode in {"path", "zip", "city"}.
     # a trailing 2-uppercase-letter token on a city is its country code.
     body = re.sub(
-        r"^!(allergy|air)\b\s*", "", text.strip(), count=1, flags=re.IGNORECASE,
+        r"^!(allergy|air|pollen)\b\s*", "", text.strip(), count=1, flags=re.IGNORECASE,
     ).strip()
     if not body:
         return "path", None, None

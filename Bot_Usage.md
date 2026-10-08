@@ -967,12 +967,12 @@ Austin [US] (30.2672,-97.7431): 82F, Humid: 65%, Rain: 0.0in, Wind: SSE 5mph
 - Default allowed channels: `#wx`, `#wxbot`, `#wx-alert`, `#bot`
 
 
-### `!allergy <city|zip>` / `!air`
+### `!allergy <city|zip>` / `!air` / `!pollen`
 
 Current airborne pollen levels for a US zip, a city, or -- with no
 argument -- the area around the first located repeater in the inbound
 message path (a direct message with no path uses the bot's own location).
-`!air` is an alias.
+`!air` and `!pollen` are aliases.
 
 Examples:
 ```
