@@ -190,6 +190,9 @@ owner_pubkeys = 0000000000000000000000000000000000000000000000000000000000000000
 [env]
 ;PWS_API_KEY = your-weather-com-api-key
 ;PWS_STATION_ID = KXXYYYY1234
+; Google Pollen API key for !allergy (optional; without it the command
+; falls back to pollen.com, which is US-only).
+;POLLEN_GOOGLE_API_KEY = your-google-pollen-api-key
 ; Sink API bearer token, used when [bot] url_shortener = sink. This is the
 ; instance's NUXT_SITE_TOKEN, not its NUXT_CF_API_TOKEN analytics token.
 ;SINK_API_TOKEN = your-sink-site-token

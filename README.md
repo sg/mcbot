@@ -29,7 +29,8 @@ paths the radio firmware offers:
   the commands the caller can run, and `!whoami` showing the caller's
   identity and group memberships
 - Bundled example commands: `!pws` (Weather Underground PWS),
-  `!wx <city> [CC]` (Open-Meteo), `!path` (routing-path diagnostic), and more
+  `!wx <city> [CC]` (Open-Meteo), `!allergy <city|zip>` (pollen levels),
+  `!path` (routing-path diagnostic), and more
 - Configurable retention caps on stored messages, contacts, and the raw packet firehose
 - INI-based configuration with CLI-flag overrides
 - Detailed log file with per-packet decoded info, command activity, and outbound
@@ -75,6 +76,7 @@ commands/                plugin scripts; one file per command
     whoami.py               !whoami (your identity + group memberships)
     pws.py                  !pws (PWS station observation)
     wx.py                   !wx <city> [CC] (Open-Meteo)
+    allergy.py              !allergy <city|zip> / !air (pollen levels; Google Pollen API or pollen.com)
     path.py                 !path (routing path + distance + map link)
     topo.py                 !topo (geo-locate contact via topographic map link)
     quote.py                !quote (responds with a random 'quote' from a file)
