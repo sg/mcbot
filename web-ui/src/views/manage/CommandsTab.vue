@@ -1,12 +1,14 @@
 <script setup>
-import { onMounted } from 'vue'
+import { ref, onMounted } from 'vue'
 import { api } from '../../api.js'
+import InfoTip from '../../components/InfoTip.vue'
 import { useManage } from './context.js'
 import SettingRows from './SettingRows.vue'
 
 const {
   data, error, notice, fetchTab, reload,
-  channelNames, ensureChannelNames, loadSettings,
+  channelNames, commandNames, ensureChannelNames, ensureCommandNames,
+  loadSettings,
 } = useManage()
 
 onMounted(async () => {
@@ -49,6 +51,29 @@ async function patchCommand(cmd, fields) {
     await reload('command-config') // resync to server truth on failure
   }
 }
+// ---- plugin reload ('!adm reload' equivalent) ----
+const reloading = ref(false)
+async function reloadCommands() {
+  if (reloading.value) return
+  reloading.value = true
+  error.value = ''
+  notice.value = ''
+  try {
+    const r = await api('/bot/reload', { method: 'POST' })
+    notice.value = `Reloaded: ${r.before} -> ${r.after} commands (${r.seeded} new seeded)`
+    if (r.errors.length) error.value = `${r.errors.length} failed to load: ${r.errors.join('; ')}`
+  } catch (e) {
+    error.value = e.message
+  }
+  // the list, the name cache behind other tabs' pickers, and the Overview's
+  // "commands loaded" count may all have changed
+  await reload('command-config')
+  commandNames.value = []
+  await ensureCommandNames()
+  if (data.value.stats) await reload('stats')
+  reloading.value = false
+}
+
 function addCommandChannel(row, channel) {
   if (!channel || row._chans.includes(channel)) return
   patchCommand(row.command, { allowed_channels: [...row._chans, channel] })
@@ -61,6 +86,12 @@ function removeCommandChannel(row, channel) {
 <template>
   <div>
     <SettingRows group="commands" />
+    <div class="toolbar">
+      <button :disabled="reloading" @click="reloadCommands">
+        {{ reloading ? 'Reloading…' : 'Reload' }}
+      </button>
+      <InfoTip text="Same as '!adm reload': rescans commands/ and re-imports every plugin (picks up new or edited scripts, seeds config rows for new ones), then refreshes this list." />
+    </div>
     <table>
       <thead>
         <tr>

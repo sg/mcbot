@@ -23,6 +23,7 @@ raising, so callers can phrase "was not a member" without try/except.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import time
@@ -996,3 +997,44 @@ class Management:
             actor_pubkey, actor_name, "send.dm", pk, text[:60]
         )
         return {"id": mid, "pubkey": pk, "acked": acked}
+
+    # ==================================================================
+    # Bot lifecycle (plugin reload / full restart)
+    # ==================================================================
+    async def reload_commands(
+        self, *, actor_pubkey=None, actor_name=None,
+    ) -> dict:
+        """Rescan commands/ and re-import every plugin, seeding command_config
+        rows for any new ones. Audited as 'reload'."""
+        before, after, errors = self.bot.loader.reload_all()
+        seeded = await self.bot.seed_command_configs()
+        await self._audit(
+            actor_pubkey, actor_name, "reload", None,
+            f"{before}->{after}, errors={len(errors)}, seeded={seeded}",
+        )
+        return {
+            "before": before, "after": after, "seeded": seeded,
+            "errors": list(errors),
+        }
+
+    async def restart(
+        self, delay: float, *, actor_pubkey=None, actor_name=None,
+    ) -> dict:
+        """Schedule a full teardown + reinit (re-reads config) through the
+        amain() outer loop. Teardown is deferred by `delay` so the caller's
+        reply can get out first: a mesh reply needs ~5s for its ACK, an HTTP
+        response far less. Audited as 'restart'."""
+        await self._audit(actor_pubkey, actor_name, "restart", None, None)
+        bot = self.bot
+
+        async def _trigger():
+            await asyncio.sleep(delay)
+            bot.logger.info(
+                "restart triggered by %s — tearing down", actor_name or "?",
+            )
+            bot.restart_requested = True
+            bot.stop_event.set()
+
+        # keep a reference so the pending task can't be garbage-collected
+        self._restart_task = asyncio.create_task(_trigger())
+        return {"restart_in": delay}
