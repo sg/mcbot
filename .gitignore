@@ -20,3 +20,6 @@ __pycache__/
 *.py[cod]
 venv/
 .venv/
+
+# local developer notes / research (not for the repo)
+dev-notes/
